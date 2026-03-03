@@ -1,11 +1,13 @@
 """Tests for summarizer module."""
 
 import pytest
+from unittest.mock import MagicMock, patch
 from jcodemunch_mcp.parser import Symbol
 from jcodemunch_mcp.summarizer import (
     extract_summary_from_docstring,
     signature_fallback,
     summarize_symbols_simple,
+    GeminiBatchSummarizer,
 )
 
 
@@ -102,7 +104,54 @@ def test_simple_summarize_fallback_to_signature():
             docstring="",
         )
     ]
-    
+
     result = summarize_symbols_simple(symbols)
     assert "def foo" in result[0].summary
+
+
+def test_gemini_summarizer_no_api_key():
+    """GeminiBatchSummarizer falls back to signature when no API key is set."""
+    with patch.dict("os.environ", {}, clear=True):
+        summarizer = GeminiBatchSummarizer()
+        assert summarizer.client is None
+
+    symbols = [
+        Symbol(
+            id="test::bar",
+            file="test.py",
+            name="bar",
+            qualified_name="bar",
+            kind="function",
+            language="python",
+            signature="def bar():",
+        )
+    ]
+    summarizer.summarize_batch(symbols)
+    assert symbols[0].summary == "def bar():"
+
+
+def test_gemini_summarizer_with_mock_client():
+    """GeminiBatchSummarizer uses Gemini response when client is available."""
+    mock_response = MagicMock()
+    mock_response.text = "1. Computes the sum of two integers."
+
+    mock_client = MagicMock()
+    mock_client.generate_content.return_value = mock_response
+
+    summarizer = GeminiBatchSummarizer()
+    summarizer.client = mock_client
+
+    symbols = [
+        Symbol(
+            id="test::add",
+            file="test.py",
+            name="add",
+            qualified_name="add",
+            kind="function",
+            language="python",
+            signature="def add(a: int, b: int) -> int:",
+        )
+    ]
+    summarizer.summarize_batch(symbols)
+    assert symbols[0].summary == "Computes the sum of two integers."
 

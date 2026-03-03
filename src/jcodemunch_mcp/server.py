@@ -40,7 +40,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "use_ai_summaries": {
                         "type": "boolean",
-                        "description": "Use AI to generate symbol summaries (requires ANTHROPIC_API_KEY). When false, uses docstrings or signature fallback.",
+                        "description": "Use AI to generate symbol summaries (requires ANTHROPIC_API_KEY or GOOGLE_API_KEY). Anthropic takes priority if both are set. When false, uses docstrings or signature fallback.",
                         "default": True
                     }
                 },
@@ -59,7 +59,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "use_ai_summaries": {
                         "type": "boolean",
-                        "description": "Use AI to generate symbol summaries (requires ANTHROPIC_API_KEY). When false, uses docstrings or signature fallback.",
+                        "description": "Use AI to generate symbol summaries (requires ANTHROPIC_API_KEY or GOOGLE_API_KEY). Anthropic takes priority if both are set. When false, uses docstrings or signature fallback.",
                         "default": True
                     },
                     "extra_ignore_patterns": {

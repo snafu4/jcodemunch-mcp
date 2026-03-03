@@ -1,4 +1,4 @@
-"""Three-tier summarization: docstring > AI (Haiku) > signature fallback."""
+"""Three-tier summarization: docstring > AI (Haiku or Gemini) > signature fallback."""
 
 import os
 from dataclasses import dataclass
@@ -167,6 +167,128 @@ class BatchSummarizer:
         return summaries
 
 
+@dataclass
+class GeminiBatchSummarizer:
+    """AI-based batch summarization using Google Gemini Flash (Tier 2)."""
+
+    model: str = "gemini-1.5-flash"
+    max_tokens_per_batch: int = 500
+
+    def __post_init__(self):
+        self.client = None
+        self._init_client()
+
+    def _init_client(self):
+        """Initialize Gemini client if API key is available."""
+        try:
+            import google.generativeai as genai
+            api_key = os.environ.get("GOOGLE_API_KEY")
+            if api_key:
+                genai.configure(api_key=api_key)
+                self.client = genai.GenerativeModel(self.model)
+        except ImportError:
+            self.client = None
+
+    def summarize_batch(self, symbols: list[Symbol], batch_size: int = 10) -> list[Symbol]:
+        """Summarize a batch of symbols using Gemini."""
+        if not self.client:
+            for sym in symbols:
+                if not sym.summary:
+                    sym.summary = signature_fallback(sym)
+            return symbols
+
+        to_summarize = [s for s in symbols if not s.summary and not s.docstring]
+
+        if not to_summarize:
+            return symbols
+
+        for i in range(0, len(to_summarize), batch_size):
+            batch = to_summarize[i:i + batch_size]
+            self._summarize_one_batch(batch)
+
+        return symbols
+
+    def _summarize_one_batch(self, batch: list[Symbol]):
+        """Summarize one batch of symbols."""
+        prompt = self._build_prompt(batch)
+
+        try:
+            response = self.client.generate_content(prompt)
+            summaries = self._parse_response(response.text, len(batch))
+
+            for sym, summary in zip(batch, summaries):
+                if summary:
+                    sym.summary = summary
+                else:
+                    sym.summary = signature_fallback(sym)
+
+        except Exception:
+            for sym in batch:
+                if not sym.summary:
+                    sym.summary = signature_fallback(sym)
+
+    def _build_prompt(self, symbols: list[Symbol]) -> str:
+        """Build summarization prompt for a batch."""
+        lines = [
+            "Summarize each code symbol in ONE short sentence (max 15 words).",
+            "Focus on what it does, not how.",
+            "",
+            "Input:",
+        ]
+
+        for i, sym in enumerate(symbols, 1):
+            lines.append(f"{i}. {sym.kind}: {sym.signature}")
+
+        lines.extend([
+            "",
+            "Output format: NUMBER. SUMMARY",
+            "Example: 1. Authenticates users with username and password.",
+            "",
+            "Summaries:",
+        ])
+
+        return "\n".join(lines)
+
+    def _parse_response(self, text: str, expected_count: int) -> list[str]:
+        """Parse numbered summaries from response."""
+        summaries = [""] * expected_count
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if "." in line:
+                parts = line.split(".", 1)
+                try:
+                    num = int(parts[0].strip())
+                    if 1 <= num <= expected_count:
+                        summaries[num - 1] = parts[1].strip()
+                except ValueError:
+                    continue
+
+        return summaries
+
+
+def _create_summarizer() -> Optional[BatchSummarizer]:
+    """Return the appropriate summarizer based on available API keys.
+
+    Priority: Anthropic > Google Gemini.
+    Returns None if no API keys are configured.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        s = BatchSummarizer()
+        if s.client:
+            return s
+
+    if os.environ.get("GOOGLE_API_KEY"):
+        s = GeminiBatchSummarizer()
+        if s.client:
+            return s
+
+    return None
+
+
 def summarize_symbols_simple(symbols: list[Symbol]) -> list[Symbol]:
     """Tier 1 + Tier 3: Docstring extraction + signature fallback.
     
@@ -189,24 +311,31 @@ def summarize_symbols_simple(symbols: list[Symbol]) -> list[Symbol]:
 
 def summarize_symbols(symbols: list[Symbol], use_ai: bool = True) -> list[Symbol]:
     """Full three-tier summarization.
-    
+
     Tier 1: Docstring extraction (free)
-    Tier 2: AI batch summarization (Haiku)
+    Tier 2: AI batch summarization (Claude Haiku or Gemini Flash, auto-detected)
     Tier 3: Signature fallback (always works)
+
+    Provider selection (Tier 2):
+      - ANTHROPIC_API_KEY set → Claude Haiku
+      - GOOGLE_API_KEY set    → Gemini Flash
+      - Both set              → Anthropic takes priority
+      - Neither set           → skip to Tier 3
     """
     # Tier 1: Extract from docstrings
     for sym in symbols:
         if sym.docstring and not sym.summary:
             sym.summary = extract_summary_from_docstring(sym.docstring)
-    
+
     # Tier 2: AI summarization for remaining symbols
     if use_ai:
-        summarizer = BatchSummarizer()
-        symbols = summarizer.summarize_batch(symbols)
-    
+        summarizer = _create_summarizer()
+        if summarizer:
+            symbols = summarizer.summarize_batch(symbols)
+
     # Tier 3: Signature fallback for any still missing
     for sym in symbols:
         if not sym.summary:
             sym.summary = signature_fallback(sym)
-    
+
     return symbols
