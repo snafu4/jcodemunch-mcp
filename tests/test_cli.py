@@ -2,6 +2,7 @@
 
 import pytest
 
+from jcodemunch_mcp import __version__
 from jcodemunch_mcp.server import main
 
 
@@ -14,3 +15,23 @@ def test_main_help_exits_without_starting_server(capsys):
     out = capsys.readouterr().out
     assert "jcodemunch-mcp" in out
     assert "Run the jCodeMunch MCP stdio server" in out
+
+
+def test_main_version_exits_with_version(capsys):
+    """`--version` should print version and exit cleanly."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out == f"jcodemunch-mcp {__version__}\n"
+
+
+def test_main_short_version_flag_exits_with_version(capsys):
+    """`-V` should print version and exit cleanly."""
+    with pytest.raises(SystemExit) as exc:
+        main(["-V"])
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert out == f"jcodemunch-mcp {__version__}\n"

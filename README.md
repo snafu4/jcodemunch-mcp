@@ -124,6 +124,19 @@ Verify:
 jcodemunch-mcp --help
 ```
 
+Show the MCP version (three options):
+
+```bash
+# 1) CLI flag (best for humans)
+jcodemunch-mcp --version  # or: jcodemunch-mcp -V
+
+# 2) Python package attribute
+python -c "import jcodemunch_mcp; print(jcodemunch_mcp.__version__)"
+
+# 3) Packaging metadata (best for automation)
+python -c 'from importlib.metadata import version; print(version("jcodemunch-mcp"))'
+```
+
 ---
 
 ## Configure MCP Client

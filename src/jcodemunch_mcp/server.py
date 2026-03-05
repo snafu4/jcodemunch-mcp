@@ -11,6 +11,7 @@ from typing import Any, Optional
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
+from . import __version__
 from .tools.index_repo import index_repo
 from .tools.index_folder import index_folder
 from .tools.list_repos import list_repos
@@ -386,6 +387,13 @@ def main(argv: Optional[list[str]] = None):
     parser = argparse.ArgumentParser(
         prog="jcodemunch-mcp",
         description="Run the jCodeMunch MCP stdio server.",
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show MCP server version and exit.",
     )
     parser.add_argument(
         "--log-level",
