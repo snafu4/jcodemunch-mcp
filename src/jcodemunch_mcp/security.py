@@ -206,7 +206,7 @@ def safe_decode(data: bytes, encoding: str = "utf-8") -> str:
 # --- Composite Filters ---
 
 DEFAULT_MAX_FILE_SIZE = 500 * 1024  # 500KB
-DEFAULT_MAX_INDEX_FILES = 500
+DEFAULT_MAX_INDEX_FILES = 10_000
 MAX_INDEX_FILES_ENV_VAR = "JCODEMUNCH_MAX_INDEX_FILES"
 
 
