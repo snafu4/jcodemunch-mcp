@@ -70,11 +70,12 @@ def test_main_token_stats_text_outputs_human_readable(capsys, monkeypatch, tmp_p
 
 
 def test_main_help_lists_defaults_and_explainer(capsys):
-    """`--help` should show defaults plus field-basis explainer text."""
+    """`--help` should show defaults plus readable token-stats field descriptions."""
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
 
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "default: text" in out
-    assert "What each field is based on:" in out
+    assert "token-stats fields:" in out
+    assert "Cost avoided (Claude Opus):" in out

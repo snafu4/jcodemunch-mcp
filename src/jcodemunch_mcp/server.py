@@ -425,14 +425,28 @@ def _token_stats_summary(report: dict[str, Any]) -> dict[str, Any]:
 def _token_stats_fields_explainer() -> str:
     """Help epilog explaining what token-stat fields are based on."""
     return (
-        "What each field is based on:\n"
-        "  total_tokens_saved: cumulative counter from _savings.json\n"
-        "  approx_raw_bytes_avoided: total_tokens_saved * 4 bytes/token heuristic\n"
-        "  total_cost_avoided: total_tokens_saved multiplied by built-in model pricing\n"
-        "  equivalent_context_windows: total_tokens_saved normalized by 32k/128k/1m windows\n"
-        "\n"
-        "For full details use --token-stats-all. Output format is controlled by --output-format."
+        "token-stats fields:\n"
+        "jCodeMunch Token Savings\n"
+        "------------------------\n"
+        "Cost avoided (Claude Opus): Estimated saved using Claude Opus input pricing (total_tokens_saved × $15 / 1M).\n"
+        "Cost avoided (GPT-5 latest): Estimated saved using GPT-5 latest input pricing (total_tokens_saved × $10 / 1M).\n"
+        "Equivalent 32k windows: How many 32,000-token context windows the saved tokens equal.\n"
+        "Equivalent 128k windows: How many 128,000-token context windows the saved tokens equal.\n"
+        "Equivalent 1m windows: How many 1,000,000-token context windows the saved tokens equal.\n"
+        "Anon ID present: Whether _savings.json has an anonymous install ID for optional community meter sharing.\n"
     )
+
+
+def _print_token_stats(output: str) -> None:
+    """Print token stats text, preferring Rich when available."""
+    import importlib.util
+
+    if importlib.util.find_spec("rich") is not None:
+        from rich.console import Console
+
+        Console().print(output)
+    else:
+        print(output)
 
 
 def main(argv: Optional[list[str]] = None):
@@ -484,7 +498,7 @@ def main(argv: Optional[list[str]] = None):
         if args.output_format == "json":
             print(json.dumps(report, indent=2))
         else:
-            print(_format_token_stats_text(report))
+            _print_token_stats(_format_token_stats_text(report))
         return
 
     log_level = getattr(logging, args.log_level)
