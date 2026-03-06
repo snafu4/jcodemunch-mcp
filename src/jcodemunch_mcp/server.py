@@ -22,6 +22,7 @@ from .tools.search_symbols import search_symbols
 from .tools.invalidate_cache import invalidate_cache
 from .tools.search_text import search_text
 from .tools.get_repo_outline import get_repo_outline
+from .storage.token_tracker import get_savings_report
 
 
 # Create server
@@ -384,6 +385,29 @@ async def run_server():
         )
 
 
+def _format_token_stats_text(report: dict[str, Any]) -> str:
+    """Format savings report for humans (non-JSON)."""
+    windows = report.get("equivalent_context_windows", {})
+    costs = report.get("total_cost_avoided", {})
+    telemetry = "enabled" if report.get("telemetry_enabled") else "disabled"
+    anon = "yes" if report.get("anon_id_present") else "no"
+
+    return "\n".join([
+        "jCodeMunch Token Savings",
+        "------------------------",
+        f"Total tokens saved: {report.get('total_tokens_saved', 0):,}",
+        f"Approx raw bytes avoided: {report.get('approx_raw_bytes_avoided', 0):,}",
+        f"Cost avoided (Claude Opus): ${costs.get('claude_opus', 0):.4f}",
+        f"Cost avoided (GPT-5 latest): ${costs.get('gpt5_latest', 0):.4f}",
+        f"Equivalent 32k windows: {windows.get('32k', 0)}",
+        f"Equivalent 128k windows: {windows.get('128k', 0)}",
+        f"Equivalent 1m windows: {windows.get('1m', 0)}",
+        f"Telemetry: {telemetry}",
+        f"Anon ID present: {anon}",
+        f"Savings file: {report.get('savings_file', '')}",
+    ])
+
+
 def main(argv: Optional[list[str]] = None):
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -407,7 +431,32 @@ def main(argv: Optional[list[str]] = None):
         default=os.environ.get("JCODEMUNCH_LOG_FILE"),
         help="Log file path (also via JCODEMUNCH_LOG_FILE env var). Defaults to stderr.",
     )
+    parser.add_argument(
+        "--token-stats",
+        action="store_true",
+        help="Print cumulative token-savings insights and exit.",
+    )
+    parser.add_argument(
+        "--token-stats-json",
+        action="store_true",
+        help="Print token-savings insights as compact JSON and exit.",
+    )
+    parser.add_argument(
+        "--token-stats-text",
+        action="store_true",
+        help="Print token-savings insights in a human-readable text format and exit.",
+    )
     args = parser.parse_args(argv)
+
+    if args.token_stats or args.token_stats_json or args.token_stats_text:
+        report = get_savings_report(os.environ.get("CODE_INDEX_PATH"))
+        if args.token_stats_json:
+            print(json.dumps(report, separators=(",", ":")))
+        elif args.token_stats_text:
+            print(_format_token_stats_text(report))
+        else:
+            print(json.dumps(report, indent=2))
+        return
 
     log_level = getattr(logging, args.log_level)
     handlers: list[logging.Handler] = []
