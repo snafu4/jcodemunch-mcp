@@ -78,4 +78,5 @@ def test_main_help_lists_defaults_and_explainer(capsys):
     out = capsys.readouterr().out
     assert "default: text" in out
     assert "token-stats fields:" in out
+    assert "token-stats fields:\njCodeMunch Token Savings\n------------------------" in out
     assert "Cost avoided (Claude Opus):" in out

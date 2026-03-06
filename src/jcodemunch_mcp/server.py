@@ -29,6 +29,13 @@ from .storage.token_tracker import get_savings_report
 server = Server("jcodemunch-mcp")
 
 
+class _HelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawDescriptionHelpFormatter,
+):
+    """Argparse formatter showing defaults while preserving epilog line breaks."""
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available tools."""
@@ -428,8 +435,8 @@ def _token_stats_fields_explainer() -> str:
         "token-stats fields:\n"
         "jCodeMunch Token Savings\n"
         "------------------------\n"
-        "Cost avoided (Claude Opus): Estimated saved using Claude Opus input pricing (total_tokens_saved × $15 / 1M).\n"
-        "Cost avoided (GPT-5 latest): Estimated saved using GPT-5 latest input pricing (total_tokens_saved × $10 / 1M).\n"
+        "Cost avoided (Claude Opus): Estimated USD saved using Claude Opus input pricing (total_tokens_saved × $15 / 1M).\n"
+        "Cost avoided (GPT-5 latest): Estimated USD saved using GPT-5 latest input pricing (total_tokens_saved × $10 / 1M).\n"
         "Equivalent 32k windows: How many 32,000-token context windows the saved tokens equal.\n"
         "Equivalent 128k windows: How many 128,000-token context windows the saved tokens equal.\n"
         "Equivalent 1m windows: How many 1,000,000-token context windows the saved tokens equal.\n"
@@ -454,7 +461,7 @@ def main(argv: Optional[list[str]] = None):
     parser = argparse.ArgumentParser(
         prog="jcodemunch-mcp",
         description="Run the jCodeMunch MCP stdio server.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
         epilog=_token_stats_fields_explainer(),
     )
     parser.add_argument(
