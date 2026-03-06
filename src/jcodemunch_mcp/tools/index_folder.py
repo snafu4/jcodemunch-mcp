@@ -43,11 +43,16 @@ SKIP_PATTERNS = [
 
 def should_skip_file(path: str) -> bool:
     """Check if file should be skipped based on path patterns."""
-    # Normalize path separators for matching
     normalized = path.replace("\\", "/")
     for pattern in SKIP_PATTERNS:
-        if pattern in normalized:
-            return True
+        if pattern.endswith("/"):
+            # Directory pattern: match only complete path segments to avoid
+            # false positives on names like "rebuild/" or "proto-utils/"
+            if normalized.startswith(pattern) or ("/" + pattern) in normalized:
+                return True
+        else:
+            if pattern in normalized:
+                return True
     return False
 
 
