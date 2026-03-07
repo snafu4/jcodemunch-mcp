@@ -36,6 +36,8 @@ def parse_file(content: str, filename: str, language: str) -> list[Symbol]:
         symbols = _parse_vue_symbols(source_bytes, filename)
     elif language == "ejs":
         symbols = _parse_ejs_symbols(source_bytes, filename)
+    elif language == "verse":
+        symbols = _parse_verse_symbols(source_bytes, filename)
     else:
         spec = LANGUAGE_REGISTRY[language]
         symbols = _parse_with_spec(source_bytes, filename, language, spec)
@@ -1318,6 +1320,669 @@ _BLADE_SYMBOL_PATTERNS: list[tuple[str, str, str]] = [
     ("method",   r"@yield\s*\(\s*['\"](?P<name>[^'\"]+)['\"]", "name"),
     ("class",    r"@livewire\s*\(\s*['\"](?P<name>[^'\"]+)['\"]", "name"),
 ]
+
+# ---------------------------------------------------------------------------
+# Verse (UEFN) — regex-based symbol extraction for Epic's Verse language
+# ---------------------------------------------------------------------------
+#
+# No tree-sitter grammar exists for Verse, so this parser uses regex with a
+# multi-pass strategy similar to the Blade parser above.
+#
+# PRIMARY USE CASE: Token-efficient lookup of UEFN API digest files.
+#
+# Epic ships Fortnite/UEFN API definitions as `.verse` digest files that are
+# very large (the three standard digest files total ~800KB / ~200k tokens):
+#
+#   Fortnite.digest.verse    587KB  12,258 lines  3,608 symbols  ~147k tokens
+#   Verse.digest.verse       125KB   2,368 lines    622 symbols   ~31k tokens
+#   UnrealEngine.digest.verse 91KB   1,495 lines    326 symbols   ~23k tokens
+#
+# Loading even one of these into an LLM context window is expensive.
+# With jcodemunch indexing, a typical symbol lookup returns ~94 tokens
+# instead of ~147,000 — a 99.9% reduction. A search returning 10 signature
+# matches costs ~130 tokens vs the full file's ~147k.
+#
+# ARCHITECTURE:
+#
+# Verse uses indentation-based scoping with a distinctive declaration syntax:
+#
+#   name<specifiers> := kind<specifiers>(parents):
+#       member<specifiers>(...)<effects>:return_type
+#       var Name<specifiers>:type
+#
+# Extension methods use receiver syntax:
+#   (Param:type).MethodName<specifiers>()<effects>:return_type
+#
+# Digest files use path-prefixed declarations for namespace qualification:
+#   (/Fortnite.com:)UI<public> := module:
+#
+# Decorators use @attribute syntax:
+#   @editable
+#   @available {MinUploadedAtFNVersion := 3800}
+#
+# The parser runs in 5 passes to handle declaration priority correctly:
+#   Pass 1: Container definitions (module, class, interface, struct, enum, trait)
+#   Pass 2: Extension methods — (Receiver:type).Method() syntax
+#   Pass 3: Regular methods — indented Name(params) inside containers
+#   Pass 4: Variables — var Name:type declarations
+#   Pass 5: Constants — Name:type = value assignments
+#
+# IMPORTANT — Character vs byte offset handling:
+#
+# Python regex operates on decoded strings where multi-byte UTF-8 characters
+# (e.g., smart quotes U+2019 = 3 bytes) count as 1 character. But the
+# retrieval path (get_symbol_content) does binary f.seek(byte_offset), so
+# stored byte_offset values MUST be real byte positions — not character
+# positions. The char_pos_to_byte_pos() helper handles this conversion.
+# The Verse digest files contain multi-byte UTF-8 characters in docstrings
+# (smart quotes), which affects ~60% of all extracted symbols.
+
+# Shared regex fragment for Verse specifiers like <public>, <native><override>
+_VERSE_SPECS = r'(?:<[a-z_]+>)*'
+
+# --- Pass 1 regex: Container definitions ---
+# Matches: name<specs> := kind<specs>(parents):
+# Also:    (/Fortnite.com:)name<specs> := module:
+_VERSE_DEF_RE = re.compile(
+    r'^([ \t]*)'                                   # (1) indentation — [ \t] only, NOT \s (which captures \n in MULTILINE)
+    r'(?:\([^)]*:\))?'                             # optional path prefix e.g. (/Fortnite.com:)
+    r'([\w]+)'                                     # (2) name
+    r'(' + _VERSE_SPECS + r')'                     # (3) specifiers e.g. <public><native>
+    r'\s*:=\s*'                                    # := assignment operator
+    r'(module|class|interface|struct|enum|trait)'   # (4) kind keyword
+    r'(' + _VERSE_SPECS + r')'                     # (5) kind specifiers e.g. <concrete>
+    r'(?:\(([^)]*)\))?'                            # (6) optional parent types e.g. (base_class)
+    r'\s*:',                                       # trailing colon (starts indented block)
+    re.MULTILINE,
+)
+
+# --- Pass 3 regex: Method/function members ---
+# Matches: Name<specs>(params)<effects>:return_type
+# Also:    (/Path:)Name<specs>(...)
+_VERSE_METHOD_RE = re.compile(
+    r'^([ \t]+)'                                   # (1) indentation — must be indented (inside a container)
+    r'(?:\([^)]*:\))?'                             # optional path prefix
+    r'([\w]+)'                                     # (2) name
+    r'(' + _VERSE_SPECS + r')'                     # (3) specifiers
+    r'\(([^)]*)\)'                                 # (4) parameters
+    r'(' + _VERSE_SPECS + r')'                     # (5) effect specifiers e.g. <decides><transacts>
+    r'(?::(\S+))?'                                 # (6) optional return type
+    r'.*$',                                        # rest of line (may contain = external {})
+    re.MULTILINE,
+)
+
+# --- Pass 2 regex: Extension methods ---
+# Matches: (Param:type).Name<specs>(params)<effects>:return_type
+_VERSE_EXT_METHOD_RE = re.compile(
+    r'^([ \t]*)'                                   # (1) indentation
+    r'\(([^)]+)\)'                                 # (2) receiver e.g. (InCharacter:fort_character)
+    r'\.([\w]+)'                                   # (3) method name after dot
+    r'(' + _VERSE_SPECS + r')'                     # (4) specifiers
+    r'\(([^)]*)\)'                                 # (5) parameters
+    r'(' + _VERSE_SPECS + r')'                     # (6) effect specifiers
+    r'(?::(\S+))?'                                 # (7) optional return type
+    r'.*$',
+    re.MULTILINE,
+)
+
+# --- Pass 4 regex: Variable declarations ---
+# Matches: var Name<specs>:type  or  var<private> Name:type
+_VERSE_VAR_RE = re.compile(
+    r'^([ \t]+)'                                   # (1) indentation (must be inside container)
+    r'var(?:<[a-z_]+>)?'                           # var keyword with optional specifier
+    r'\s+'
+    r'([\w]+)'                                     # (2) name
+    r'(' + _VERSE_SPECS + r')'                     # (3) specifiers
+    r':([^\s=]+)'                                  # (4) type (up to whitespace or =)
+    r'.*$',
+    re.MULTILINE,
+)
+
+# --- Pass 5 regex: Constants/values ---
+# Matches: Name<specs>:type = ...
+# Also:    (/Path:)Name<specs>:type = external {}
+_VERSE_CONST_RE = re.compile(
+    r'^([ \t]+)'                                   # (1) indentation (must be inside container)
+    r'(?:\([^)]*:\))?'                             # optional path prefix
+    r'([\w]+)'                                     # (2) name
+    r'(' + _VERSE_SPECS + r')'                     # (3) specifiers
+    r':(\S+)'                                      # (4) type
+    r'\s*=\s*'                                     # = assignment
+    r'.*$',
+    re.MULTILINE,
+)
+
+# Enum value (simple identifier on its own line — currently unused, reserved for future)
+_VERSE_ENUM_VAL_RE = re.compile(
+    r'^(\s+)'                                      # (1) indentation
+    r'([\w]+)'                                     # (2) name
+    r'\s*$',
+    re.MULTILINE,
+)
+
+# Module import path comment: # Module import path: /Something/Path
+_VERSE_MODULE_PATH_RE = re.compile(
+    r'#\s*Module import path:\s*(\S+)',
+)
+
+# Decorator line: @editable, @available {MinUploadedAtFNVersion := 3800}
+_VERSE_DECORATOR_RE = re.compile(
+    r'^(\s*)@(\w+)\s*(.*?)$',
+    re.MULTILINE,
+)
+
+
+def _parse_verse_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Extract symbols from Verse (UEFN) source files using regex.
+
+    Designed for Epic's Verse API digest files (Fortnite.digest.verse,
+    Verse.digest.verse, UnrealEngine.digest.verse). These files define the
+    entire UEFN API surface — thousands of classes, methods, and constants —
+    and are too large to load into an LLM context window directly (~200k
+    tokens for all three). Indexing them with jcodemunch reduces a typical
+    symbol lookup from ~147,000 tokens to ~94 tokens (99.9% savings).
+
+    The parser runs in 5 ordered passes so earlier passes take priority over
+    later ones via seen_ids deduplication:
+
+      Pass 1: Container definitions (module, class, interface, struct, enum)
+      Pass 2: Extension methods — (Receiver:type).Method() syntax
+      Pass 3: Regular methods — indented Name(params) inside containers
+      Pass 4: Variable declarations — var Name:type
+      Pass 5: Constants — Name:type = value
+
+    Parent-child relationships are determined by line-range containment: each
+    container records its start/end line, and members are assigned to the
+    innermost container whose line range encloses them and whose indentation
+    is less than the member's.
+
+    Args:
+        source_bytes: Raw file content (binary). Used for byte-offset
+            calculation and content hashing.
+        filename: The file's path/name for symbol IDs.
+
+    Returns:
+        List of Symbol objects sorted by line number, with correct
+        byte_offset/byte_length for binary file seeking.
+    """
+    content = source_bytes.decode("utf-8", errors="replace")
+    lines = content.splitlines()
+
+    # ── Dual offset tables (char-based and byte-based) ──────────────────
+    #
+    # Why two tables? Python regex .start() returns CHARACTER positions in
+    # the decoded string, but get_symbol_content() does f.seek(byte_offset)
+    # in binary mode — it needs BYTE positions.
+    #
+    # For pure ASCII files these are identical. But the Verse digest files
+    # contain multi-byte UTF-8 characters (e.g., smart quotes U+2019 = 3
+    # bytes \xe2\x80\x99 in docstrings). In Fortnite.digest.verse, ~60% of
+    # symbols appear after such characters, so their char offset diverges
+    # from their byte offset. Without this conversion, get_symbol_content()
+    # would seek to the wrong file position and return corrupted content.
+    char_line_starts: list[int] = []  # cumulative character offset per line
+    byte_line_starts: list[int] = []  # cumulative byte offset per line
+    char_off = 0
+    byte_off = 0
+    for line in lines:
+        char_line_starts.append(char_off)
+        byte_line_starts.append(byte_off)
+        char_off += len(line) + 1              # +1 for \n (char count)
+        byte_off += len(line.encode("utf-8")) + 1  # +1 for \n (byte count)
+
+    def char_to_line(char_pos: int) -> int:
+        """Map a character offset (from regex .start()) to a 1-indexed line number.
+
+        Uses binary search over char_line_starts for O(log n) lookup.
+        """
+        lo, hi = 0, len(char_line_starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if char_line_starts[mid] <= char_pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1  # 1-indexed
+
+    def char_pos_to_byte_pos(char_pos: int) -> int:
+        """Convert a character offset (from regex .start()) to a real byte offset.
+
+        This is the critical bridge between regex (which operates on decoded
+        Python strings) and file I/O (which operates on raw bytes). The
+        algorithm:
+          1. Binary-search char_line_starts to find which line char_pos is on
+          2. Compute how many chars into that line: char_pos - line_char_start
+          3. Encode just that line prefix to UTF-8 to get exact byte count
+          4. Return: byte_line_start + encoded_prefix_byte_length
+
+        This matches tree-sitter's node.start_byte behavior for languages
+        that have tree-sitter grammars.
+        """
+        # Find the 0-based line index via binary search
+        lo, hi = 0, len(char_line_starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if char_line_starts[mid] <= char_pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        line_idx = lo
+        # Encode the chars before char_pos on this line to get byte count
+        char_into_line = char_pos - char_line_starts[line_idx]
+        line_prefix = lines[line_idx][:char_into_line]
+        return byte_line_starts[line_idx] + len(line_prefix.encode("utf-8"))
+
+    # ── Docstring and decorator extraction ──────────────────────────────
+    #
+    # Verse uses # line comments for documentation and @attribute for
+    # decorators. Both appear on lines immediately above a declaration.
+    # We walk upward from the declaration line, skipping decorators when
+    # gathering comments (and vice versa).
+
+    def _get_preceding_comment(line_idx: int) -> str:
+        """Gather # comment lines immediately above line_idx (0-indexed).
+
+        Walks upward, collecting comment text and skipping @decorator lines
+        that may be interspersed. Returns joined text with # prefix stripped.
+        """
+        doc_lines: list[str] = []
+        i = line_idx - 1
+        while i >= 0:
+            stripped = lines[i].strip()
+            if stripped.startswith("#"):
+                doc_lines.append(stripped.lstrip("# ").strip())
+                i -= 1
+            elif stripped.startswith("@"):
+                i -= 1  # decorators can appear between comment and declaration
+            else:
+                break
+        doc_lines.reverse()
+        return "\n".join(doc_lines)
+
+    def _get_decorators(line_idx: int) -> list[str]:
+        """Gather @decorator lines immediately above line_idx (0-indexed).
+
+        Walks upward, collecting decorator text and skipping # comment lines.
+        Returns decorators in source order (top to bottom).
+        """
+        decs: list[str] = []
+        i = line_idx - 1
+        while i >= 0:
+            stripped = lines[i].strip()
+            if stripped.startswith("@"):
+                decs.append(stripped)
+                i -= 1
+            elif stripped.startswith("#"):
+                i -= 1  # skip comments between decorators
+            else:
+                break
+        decs.reverse()
+        return decs
+
+    # ── Indentation-based block detection ───────────────────────────────
+
+    def _find_block_end(start_line_idx: int, base_indent: int) -> int:
+        """Find the last line of an indentation block starting at start_line_idx.
+
+        Verse uses indentation for scoping (like Python). A block ends when
+        a non-blank, non-comment line appears at the base indentation level
+        or less. Blank lines, comments, and decorator lines are skipped
+        (they don't terminate a block).
+
+        Returns: 0-indexed line number of the last line in the block.
+        """
+        last = start_line_idx
+        for i in range(start_line_idx + 1, len(lines)):
+            stripped = lines[i].strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("@"):
+                continue  # blank, comment, or decorator lines don't end blocks
+            indent = len(lines[i]) - len(lines[i].lstrip())
+            if indent <= base_indent:
+                break
+            last = i
+        return last
+
+    # ── Symbol collection state ─────────────────────────────────────────
+
+    symbols: list[Symbol] = []
+    seen_ids: set[str] = set()  # prevents duplicates across passes
+
+    # Containers track: (indent, qualified_name, kind_raw, start_line, end_line)
+    # Used for parent assignment via line-range containment. This approach
+    # correctly handles sibling containers at the same indent level — a
+    # pure indent-only strategy would incorrectly assign members of a later
+    # container to an earlier sibling.
+    containers: list[tuple[int, str, str, int, int]] = []
+
+    def _find_parent(member_line_1idx: int, member_indent: int) -> "Optional[str]":
+        """Find the innermost container enclosing this member.
+
+        Uses both indentation (member must be more indented than container)
+        and line-range containment (member line must fall within container's
+        start..end range). When multiple containers qualify, picks the one
+        with the greatest indentation (innermost nesting).
+
+        Args:
+            member_line_1idx: 1-indexed line number of the member.
+            member_indent: Column indentation of the member.
+
+        Returns:
+            Qualified name of the parent container, or None if top-level.
+        """
+        best = None
+        for _indent, cname, _ckind, cstart, cend in containers:
+            if member_indent > _indent and cstart <= member_line_1idx <= cend:
+                if best is None or _indent > best[0]:
+                    best = (_indent, cname)
+        return best[1] if best else None
+
+    # Optional module path from header comment (e.g., # Module import path: /Verse.org/...)
+    module_path = ""
+    mp_match = _VERSE_MODULE_PATH_RE.search(content)
+    if mp_match:
+        module_path = mp_match.group(1)
+
+    # ── Pass 1: Container definitions ───────────────────────────────────
+    #
+    # Extracts module, class, interface, struct, enum, and trait declarations.
+    # These are the "containers" that hold methods, vars, and constants.
+    # Must run first so containers[] is populated for parent lookups in
+    # later passes.
+    #
+    # Containers store byte_offset/byte_length spanning their FULL block
+    # (declaration line through last indented member), so get_symbol()
+    # returns the complete definition including all members.
+
+    for m in _VERSE_DEF_RE.finditer(content):
+        indent_str = m.group(1)
+        indent = len(indent_str)
+        name = m.group(2)
+        specs = m.group(3)
+        kind_raw = m.group(4)
+        kind_specs = m.group(5)
+        parents = m.group(6) or ""
+
+        # Use group(2) (the name) for line lookup — group(1) is indentation,
+        # and m.start(0) could include characters from a prior line due to
+        # ^ anchor behavior in MULTILINE mode with [ \t]* matching empty.
+        line_idx = char_to_line(m.start(2)) - 1  # 0-indexed
+        end_line_idx = _find_block_end(line_idx, indent)
+
+        # Map Verse declaration kinds to jcodemunch symbol kinds.
+        # Modules map to "class" because they act as namespaces/containers.
+        kind_map = {
+            "module": "class",
+            "class": "class",
+            "interface": "type",
+            "struct": "type",
+            "enum": "type",
+            "trait": "type",
+        }
+        kind = kind_map.get(kind_raw, "type")
+
+        sig_parts = [f"{name}{specs} := {kind_raw}{kind_specs}"]
+        if parents:
+            sig_parts.append(f"({parents})")
+        signature = "".join(sig_parts)
+
+        docstring = _get_preceding_comment(line_idx)
+        decorators = _get_decorators(line_idx)
+
+        parent_name = _find_parent(line_idx + 1, indent)
+
+        qualified = f"{parent_name}.{name}" if parent_name else name
+        sym_id = make_symbol_id(filename, qualified, kind)
+
+        if sym_id not in seen_ids:
+            seen_ids.add(sym_id)
+            match_bytes = m.group(0).encode("utf-8")
+
+            # Compute byte range for the entire container block.
+            # block_byte_start = byte position of the declaration line.
+            # block_byte_end = end of the last indented member line.
+            block_byte_start = char_pos_to_byte_pos(m.start())
+            if end_line_idx < len(byte_line_starts):
+                block_byte_end = byte_line_starts[end_line_idx] + len(lines[end_line_idx].encode("utf-8"))
+            else:
+                block_byte_end = block_byte_start + len(match_bytes)
+
+            symbols.append(Symbol(
+                id=sym_id,
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind=kind,
+                language="verse",
+                signature=signature,
+                docstring=docstring,
+                decorators=decorators,
+                parent=make_symbol_id(filename, parent_name, "class") if parent_name else None,
+                line=line_idx + 1,
+                end_line=end_line_idx + 1,
+                byte_offset=block_byte_start,
+                byte_length=block_byte_end - block_byte_start,
+                content_hash=compute_content_hash(source_bytes[block_byte_start:block_byte_end]),
+            ))
+
+        # Register container for parent lookups in passes 2-5
+        containers.append((indent, qualified, kind_raw, line_idx + 1, end_line_idx + 1))
+
+    # ── Pass 2: Extension methods ───────────────────────────────────────
+    #
+    # Verse extension methods use receiver syntax:
+    #   (InPlayer:player).GetScore<public>()<transacts>:int
+    #
+    # These are matched separately because they have a distinctive
+    # (Receiver:type).Name pattern that doesn't overlap with regular methods.
+
+    for m in _VERSE_EXT_METHOD_RE.finditer(content):
+        indent_str = m.group(1)
+        indent = len(indent_str)
+        receiver = m.group(2)
+        name = m.group(3)
+        specs = m.group(4)
+        params = m.group(5)
+        effects = m.group(6)
+        ret_type = m.group(7) or ""
+
+        line_idx = char_to_line(m.start(2)) - 1
+        sig = f"({receiver}).{name}{specs}({params}){effects}"
+        if ret_type:
+            sig += f":{ret_type}"
+
+        # Qualified name uses the receiver type (e.g., player.GetScore)
+        recv_type = receiver.split(":")[-1].strip() if ":" in receiver else receiver
+        qualified = f"{recv_type}.{name}"
+
+        # Extension methods can appear inside module blocks
+        parent_name = _find_parent(line_idx + 1, indent)
+        if parent_name:
+            qualified = f"{parent_name}.{name}"
+
+        sym_id = make_symbol_id(filename, qualified, "method")
+
+        if sym_id not in seen_ids:
+            seen_ids.add(sym_id)
+            docstring = _get_preceding_comment(line_idx)
+            decorators = _get_decorators(line_idx)
+            match_bytes = m.group(0).encode("utf-8")
+
+            symbols.append(Symbol(
+                id=sym_id,
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind="method",
+                language="verse",
+                signature=sig,
+                docstring=docstring,
+                decorators=decorators,
+                parent=make_symbol_id(filename, parent_name, "class") if parent_name else None,
+                line=line_idx + 1,
+                end_line=line_idx + 1,
+                byte_offset=char_pos_to_byte_pos(m.start()),
+                byte_length=len(match_bytes),
+                content_hash=compute_content_hash(match_bytes),
+            ))
+
+    # ── Pass 3: Regular methods inside containers ───────────────────────
+    #
+    # Matches indented Name(params) declarations that weren't already
+    # captured as container definitions (Pass 1) or extension methods
+    # (Pass 2). Requires a parent container — top-level functions with
+    # params would be unusual in digest files and are skipped.
+
+    for m in _VERSE_METHOD_RE.finditer(content):
+        indent_str = m.group(1)
+        indent = len(indent_str)
+        name = m.group(2)
+        specs = m.group(3)
+        params = m.group(4)
+        effects = m.group(5)
+        ret_type = m.group(6) or ""
+
+        line_idx = char_to_line(m.start(2)) - 1
+
+        # Guard: skip lines already handled by other passes
+        full_line = lines[line_idx].strip() if line_idx < len(lines) else ""
+        if ":=" in full_line:
+            continue  # definition line (Pass 1)
+        if full_line.startswith("var"):
+            continue  # variable declaration (Pass 4)
+
+        parent_name = _find_parent(line_idx + 1, indent)
+
+        if not parent_name:
+            continue  # methods must be inside a container
+
+        qualified = f"{parent_name}.{name}"
+        kind = "method"
+        sym_id = make_symbol_id(filename, qualified, kind)
+
+        if sym_id not in seen_ids:
+            seen_ids.add(sym_id)
+            sig = f"{name}{specs}({params}){effects}"
+            if ret_type:
+                sig += f":{ret_type}"
+
+            docstring = _get_preceding_comment(line_idx)
+            decorators = _get_decorators(line_idx)
+            match_bytes = m.group(0).encode("utf-8")
+
+            symbols.append(Symbol(
+                id=sym_id,
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind=kind,
+                language="verse",
+                signature=sig,
+                docstring=docstring,
+                decorators=decorators,
+                parent=make_symbol_id(filename, parent_name, "class") if parent_name else None,
+                line=line_idx + 1,
+                end_line=line_idx + 1,
+                byte_offset=char_pos_to_byte_pos(m.start()),
+                byte_length=len(match_bytes),
+                content_hash=compute_content_hash(match_bytes),
+            ))
+
+    # ── Pass 4: Variable declarations ───────────────────────────────────
+    #
+    # Matches: var Name<specs>:type
+    # Stored as "constant" kind (jcodemunch doesn't distinguish var/const).
+
+    for m in _VERSE_VAR_RE.finditer(content):
+        indent_str = m.group(1)
+        indent = len(indent_str)
+        name = m.group(2)
+        specs = m.group(3)
+        var_type = m.group(4)
+
+        line_idx = char_to_line(m.start(2)) - 1
+
+        parent_name = _find_parent(line_idx + 1, indent)
+
+        qualified = f"{parent_name}.{name}" if parent_name else name
+        sym_id = make_symbol_id(filename, qualified, "constant")
+
+        if sym_id not in seen_ids:
+            seen_ids.add(sym_id)
+            sig = f"var {name}{specs}:{var_type}"
+            docstring = _get_preceding_comment(line_idx)
+            match_bytes = m.group(0).encode("utf-8")
+
+            symbols.append(Symbol(
+                id=sym_id,
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind="constant",
+                language="verse",
+                signature=sig,
+                docstring=docstring,
+                parent=make_symbol_id(filename, parent_name, "class") if parent_name else None,
+                line=line_idx + 1,
+                end_line=line_idx + 1,
+                byte_offset=char_pos_to_byte_pos(m.start()),
+                byte_length=len(match_bytes),
+                content_hash=compute_content_hash(match_bytes),
+            ))
+
+    # ── Pass 5: Constants and value declarations ────────────────────────
+    #
+    # Matches: Name<specs>:type = external {}
+    # This is the most common pattern in digest files for API surface
+    # declarations. Runs last so vars (Pass 4) and definitions (Pass 1)
+    # take priority via seen_ids.
+
+    for m in _VERSE_CONST_RE.finditer(content):
+        indent_str = m.group(1)
+        indent = len(indent_str)
+        name = m.group(2)
+        specs = m.group(3)
+        const_type = m.group(4)
+
+        line_idx = char_to_line(m.start(2)) - 1
+
+        # Guard: skip lines handled by earlier passes
+        full_line = lines[line_idx].strip() if line_idx < len(lines) else ""
+        if full_line.startswith("var"):
+            continue  # var declaration (Pass 4)
+        if ":=" in full_line:
+            continue  # definition line (Pass 1)
+
+        parent_name = _find_parent(line_idx + 1, indent)
+
+        qualified = f"{parent_name}.{name}" if parent_name else name
+        sym_id = make_symbol_id(filename, qualified, "constant")
+
+        if sym_id not in seen_ids:
+            seen_ids.add(sym_id)
+            sig = f"{name}{specs}:{const_type}"
+            docstring = _get_preceding_comment(line_idx)
+            match_bytes = m.group(0).encode("utf-8")
+
+            symbols.append(Symbol(
+                id=sym_id,
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind="constant",
+                language="verse",
+                signature=sig,
+                docstring=docstring,
+                parent=make_symbol_id(filename, parent_name, "class") if parent_name else None,
+                line=line_idx + 1,
+                end_line=line_idx + 1,
+                byte_offset=char_pos_to_byte_pos(m.start()),
+                byte_length=len(match_bytes),
+                content_hash=compute_content_hash(match_bytes),
+            ))
+
+    symbols.sort(key=lambda s: s.line)
+    return symbols
+
 
 _BLADE_COMPILED: list[tuple[str, re.Pattern, str]] = [
     (kind, re.compile(pattern, re.IGNORECASE), group)

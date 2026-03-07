@@ -88,6 +88,7 @@ LANGUAGE_EXTENSIONS = {
     ".nix": "nix",
     ".vue": "vue",
     ".ejs": "ejs",
+    ".verse": "verse",
 }
 
 
@@ -767,6 +768,38 @@ VUE_SPEC = LanguageSpec(
 )
 
 
+# Verse (UEFN) specification
+# NOTE: No tree-sitter grammar exists for Epic's Verse language.
+# Symbol extraction is performed by _parse_verse_symbols() in extractor.py
+# using regex-based parsing (same approach as Blade).
+#
+# Primary use case: token-efficient lookup of UEFN API digest files.
+# The three standard Verse digest files total ~800KB / ~200k tokens:
+#   Fortnite.digest.verse    587KB  3,608 symbols  ~147k tokens
+#   Verse.digest.verse       125KB    622 symbols   ~31k tokens
+#   UnrealEngine.digest.verse 91KB    326 symbols   ~23k tokens
+#
+# With jcodemunch indexing, a single symbol lookup costs ~94 tokens
+# instead of loading the full file (~147k tokens) — a 99.9% reduction.
+# A search returning 10 signature matches costs ~130 tokens.
+#
+# The LanguageSpec fields below are intentionally empty — all extraction
+# logic lives in _parse_verse_symbols() which handles containers, methods,
+# extension methods, variables, constants, docstrings, and decorators.
+VERSE_SPEC = LanguageSpec(
+    ts_language="verse",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
 # Language registry
 LANGUAGE_REGISTRY = {
     "python": PYTHON_SPEC,
@@ -793,6 +826,7 @@ LANGUAGE_REGISTRY = {
     "nix": NIX_SPEC,
     "vue": VUE_SPEC,
     "ejs": EJS_SPEC,
+    "verse": VERSE_SPEC,
 }
 
 logger = logging.getLogger(__name__)
