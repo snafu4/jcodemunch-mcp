@@ -38,6 +38,8 @@ def parse_file(content: str, filename: str, language: str) -> list[Symbol]:
         symbols = _parse_ejs_symbols(source_bytes, filename)
     elif language == "verse":
         symbols = _parse_verse_symbols(source_bytes, filename)
+    elif language == "lua":
+        symbols = _parse_lua_symbols(source_bytes, filename)
     else:
         spec = LANGUAGE_REGISTRY[language]
         symbols = _parse_with_spec(source_bytes, filename, language, spec)
@@ -2339,4 +2341,119 @@ def _parse_ejs_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
             content_hash=compute_content_hash(chunk),
         ))
 
+    return symbols
+
+
+def _parse_lua_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Extract symbols from Lua source files using tree-sitter.
+
+    Lua uses a single ``function_declaration`` node for all named functions:
+    - ``local function name(...)`` — local function, identifier child
+    - ``function Module.name(...)`` — module function, dot_index_expression child
+    - ``function Module:name(...)`` — OOP method, method_index_expression child
+
+    Name resolution:
+    - ``identifier``             → name as-is; kind = "function"
+    - ``dot_index_expression``   → "Table.method"; kind = "method"
+    - ``method_index_expression``→ "Table:method"; kind = "method"
+
+    Preceding ``--`` line-comments are collected as docstrings.
+    """
+    from tree_sitter_language_pack import get_parser as _get_parser
+    parser = _get_parser("lua")
+    tree = parser.parse(source_bytes)
+
+    symbols: list[Symbol] = []
+
+    def _node_text(node) -> str:
+        return source_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    def _resolve_name(name_node) -> tuple[str, str, Optional[str]]:
+        """Return (name, qualified_name, parent) for a function name node."""
+        ntype = name_node.type
+        if ntype == "identifier":
+            name = _node_text(name_node)
+            return name, name, None
+        elif ntype == "dot_index_expression":
+            table_node = name_node.child_by_field_name("table")
+            field_node = name_node.child_by_field_name("field")
+            table = _node_text(table_node) if table_node else ""
+            field = _node_text(field_node) if field_node else _node_text(name_node)
+            return field, f"{table}.{field}", table or None
+        elif ntype == "method_index_expression":
+            table_node = name_node.child_by_field_name("table")
+            method_node = name_node.child_by_field_name("method")
+            table = _node_text(table_node) if table_node else ""
+            method = _node_text(method_node) if method_node else _node_text(name_node)
+            return method, f"{table}:{method}", table or None
+        else:
+            text = _node_text(name_node)
+            return text, text, None
+
+    def _collect_docstring(node) -> str:
+        """Collect preceding -- comment siblings as a docstring."""
+        comments: list[str] = []
+        prev = node.prev_named_sibling
+        while prev and prev.type == "comment":
+            raw = _node_text(prev)
+            line = raw.lstrip("-").strip()
+            comments.insert(0, line)
+            prev = prev.prev_named_sibling
+        return "\n".join(comments) if comments else ""
+
+    def _walk(node) -> None:
+        if node.type == "function_declaration":
+            _extract_lua_function(node)
+        for child in node.children:
+            _walk(child)
+
+    def _extract_lua_function(node) -> None:
+        name_node = None
+        params_node = None
+        is_local = False
+
+        for child in node.children:
+            if child.type == "local":
+                is_local = True
+            elif child.type in ("identifier", "dot_index_expression", "method_index_expression"):
+                name_node = child
+            elif child.type == "parameters":
+                params_node = child
+
+        if name_node is None:
+            return
+
+        name, qualified_name, parent = _resolve_name(name_node)
+        if not name:
+            return
+
+        kind = "method" if name_node.type in ("dot_index_expression", "method_index_expression") else "function"
+        params_text = _node_text(params_node) if params_node else "()"
+        prefix = "local function" if is_local else "function"
+        signature = f"{prefix} {qualified_name}{params_text}"
+        docstring = _collect_docstring(node)
+
+        row, _ = node.start_point
+        end_row, _ = node.end_point
+        sym_bytes = source_bytes[node.start_byte:node.end_byte]
+
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, qualified_name, kind),
+            file=filename,
+            name=name,
+            qualified_name=qualified_name,
+            kind=kind,
+            language="lua",
+            signature=signature,
+            docstring=docstring,
+            parent=parent,
+            line=row + 1,
+            end_line=end_row + 1,
+            byte_offset=node.start_byte,
+            byte_length=len(sym_bytes),
+            content_hash=compute_content_hash(sym_bytes),
+        ))
+
+    _walk(tree.root_node)
+    symbols.sort(key=lambda s: s.line)
     return symbols

@@ -105,7 +105,9 @@ Environment variables are optional:
 
 * `GITHUB_TOKEN` enables private repositories and higher GitHub API rate limits.
 * `ANTHROPIC_API_KEY` enables AI-generated summaries via Claude Haiku.
+* `ANTHROPIC_MODEL` overrides the Claude model (default: `claude-haiku-4-5-20251001`).
 * `GOOGLE_API_KEY` enables AI-generated summaries via Gemini Flash (used if `ANTHROPIC_API_KEY` is not set).
+* `GOOGLE_MODEL` overrides the Gemini model (default: `gemini-2.5-flash-lite`).
 * If neither key is set, summaries fall back to docstrings or signatures.
 
 Restart Claude Desktop after saving the config.
@@ -207,9 +209,12 @@ get_file_outline: { "repo": "fastapi/fastapi", "file_path": "fastapi/main.py" }
 
 ```
 index_folder: { "path": "/home/user/myproject" }
-get_repo_outline: { "repo": "local-myproject" }
-search_symbols: { "repo": "local-myproject", "query": "main" }
+list_repos: {}
+get_repo_outline: { "repo": "myproject" }
+search_symbols: { "repo": "myproject", "query": "main" }
 ```
+
+Local folder indexes use stable hashed repo ids under the hood. `list_repos` shows the exact stored id, and bare display-name lookup works when it is unique.
 
 ### Find and Read a Function
 
@@ -246,10 +251,21 @@ The response `_meta.content_verified` will be `true` if the source matches the s
 ### Search for Non-Symbol Content
 
 ```
-search_text: { "repo": "owner/repo", "query": "TODO", "file_pattern": "*.py" }
+search_text: { "repo": "owner/repo", "query": "TODO", "file_pattern": "*.py", "context_lines": 1 }
 ```
 
-Use `search_text` for string literals, comments, configuration values, or anything that is not a symbol name.
+Use `search_text` for string literals, comments, configuration values, or anything that is not a symbol name. Results are grouped by file and include optional `before` / `after` context lines for each match.
+
+### Read a File Slice
+
+```
+get_file_content: {
+  "repo": "owner/repo",
+  "file_path": "src/main.py",
+  "start_line": 20,
+  "end_line": 40
+}
+```
 
 ### Force Re-index
 
@@ -269,10 +285,11 @@ index_repo: { "url": "owner/repo" }
 | `list_repos`       | List all indexed repositories | —                                                                  |
 | `get_file_tree`    | Browse file structure         | `repo`, `path_prefix`                                              |
 | `get_file_outline` | Symbols in a file             | `repo`, `file_path`                                                |
+| `get_file_content` | Cached file content           | `repo`, `file_path`, `start_line`, `end_line`                      |
 | `get_symbol`       | Full source of one symbol     | `repo`, `symbol_id`, `verify`, `context_lines`                     |
 | `get_symbols`      | Batch retrieve symbols        | `repo`, `symbol_ids`                                               |
 | `search_symbols`   | Search symbols                | `repo`, `query`, `kind`, `language`, `file_pattern`, `max_results` |
-| `search_text`      | Full-text search              | `repo`, `query`, `file_pattern`, `max_results`                     |
+| `search_text`      | Full-text search              | `repo`, `query`, `file_pattern`, `max_results`, `context_lines`    |
 | `get_repo_outline` | High-level overview           | `repo`                                                             |
 | `invalidate_cache` | Delete cached index           | `repo`                                                             |
 
@@ -295,7 +312,7 @@ src/utils.py::authenticate#function
 config.py::MAX_RETRIES#constant
 ```
 
-IDs are returned by `get_file_outline`, `search_symbols`, and `search_text`. Pass them to `get_symbol` or `get_symbols` to retrieve source code.
+IDs are returned by `get_file_outline` and `search_symbols`. Pass them to `get_symbol` or `get_symbols` to retrieve source code. `search_text` returns file-and-line matches, not symbol IDs.
 
 ---
 

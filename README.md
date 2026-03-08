@@ -366,14 +366,17 @@ index_repo:   { "url": "owner/repo" }
 
 get_repo_outline: { "repo": "owner/repo" }
 get_file_outline: { "repo": "owner/repo", "file_path": "src/main.py" }
+get_file_content: { "repo": "owner/repo", "file_path": "src/main.py", "start_line": 10, "end_line": 25 }
 search_symbols:   { "repo": "owner/repo", "query": "authenticate" }
 get_symbol:       { "repo": "owner/repo", "symbol_id": "src/main.py::MyClass.login#method" }
-search_text:      { "repo": "owner/repo", "query": "TODO" }
+search_text:      { "repo": "owner/repo", "query": "TODO", "context_lines": 1 }
 ```
+
+Local folder indexes are stored with stable hashed repo ids. Use `list_repos` to inspect the exact id, or the bare display name when it is unique.
 
 ---
 
-## Tools (11)
+## Tools (12)
 
 | Tool               | Purpose                     |
 | ------------------ | --------------------------- |
@@ -382,10 +385,11 @@ search_text:      { "repo": "owner/repo", "query": "TODO" }
 | `list_repos`       | List indexed repositories   |
 | `get_file_tree`    | Repository file structure   |
 | `get_file_outline` | Symbol hierarchy for a file |
+| `get_file_content` | Retrieve cached file content |
 | `get_symbol`       | Retrieve full symbol source |
 | `get_symbols`      | Batch retrieve symbols      |
 | `search_symbols`   | Search symbols with filters |
-| `search_text`      | Full-text search            |
+| `search_text`      | Full-text search with context |
 | `get_repo_outline` | High-level repo overview    |
 | `invalidate_cache` | Remove cached index         |
 
@@ -508,7 +512,9 @@ For **LM Studio**, ensure the Local Server is running (usually on port 1234):
 | `GITHUB_TOKEN`              | GitHub API auth           | No       |
 | `ANTHROPIC_API_KEY`         | Symbol summaries via Claude Haiku (takes priority) | No       |
 | `ANTHROPIC_BASE_URL`        | Third-party Anthropic-compatible endpoints (e.g. z.ai) | No       |
+| `ANTHROPIC_MODEL`           | Model name for Claude summaries (default: `claude-haiku-4-5-20251001`) | No       |
 | `GOOGLE_API_KEY`            | Symbol summaries via Gemini Flash | No       |
+| `GOOGLE_MODEL`              | Model name for Gemini summaries (default: `gemini-2.5-flash-lite`) | No       |
 | `OPENAI_API_BASE`           | Base URL for local LLMs (e.g. `http://localhost:11434/v1`) | No |
 | `OPENAI_API_KEY`            | API key for local LLMs (default: `local-llm`) | No |
 | `OPENAI_MODEL`              | Model name for local LLMs (default: `qwen3-coder`) | No |
