@@ -5,6 +5,7 @@ import json
 import pytest
 
 from jcodemunch_mcp.server import main
+from jcodemunch_mcp.storage.token_tracker import PRICING
 
 
 def test_main_help_exits_without_starting_server(capsys):
@@ -78,5 +79,8 @@ def test_main_help_lists_defaults_and_explainer(capsys):
     out = capsys.readouterr().out
     assert "default: text" in out
     assert "token-stats fields:" in out
-    assert "token-stats fields:\njCodeMunch Token Savings\n------------------------" in out
-    assert "Cost avoided (Claude Opus):" in out
+    assert "token-stats fields:\n------------------------" in out
+    claude_cost = PRICING["claude_opus"] * 1_000_000
+    gpt5_cost = PRICING["gpt5_latest"] * 1_000_000
+    assert f"Cost avoided (Claude Opus): Estimated savings using Claude Opus input pricing (total_tokens_saved × ${claude_cost:.2f} / 1M)." in out
+    assert f"Cost avoided (GPT-5 latest): Estimated savings using GPT-5 latest input pricing (total_tokens_saved × ${gpt5_cost:.2f} / 1M)." in out

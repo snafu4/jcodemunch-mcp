@@ -22,7 +22,7 @@ from .tools.search_symbols import search_symbols
 from .tools.invalidate_cache import invalidate_cache
 from .tools.search_text import search_text
 from .tools.get_repo_outline import get_repo_outline
-from .storage.token_tracker import get_savings_report
+from .storage.token_tracker import PRICING, get_savings_report
 
 
 # Create server
@@ -401,8 +401,8 @@ def _format_token_stats_text(report: dict[str, Any]) -> str:
         "------------------------",
         f"Total tokens saved: {report.get('total_tokens_saved', 0):,}",
         f"Approx raw bytes avoided: {report.get('approx_raw_bytes_avoided', 0):,}",
-        f"Cost avoided (Claude Opus): ${costs.get('claude_opus', 0):.4f}",
-        f"Cost avoided (GPT-5 latest): ${costs.get('gpt5_latest', 0):.4f}",
+        f"Cost avoided (Claude Opus): ${costs.get('claude_opus', 0):.2f}",
+        f"Cost avoided (GPT-5 latest): ${costs.get('gpt5_latest', 0):.2f}",
         f"Equivalent 32k windows: {windows.get('32k', 0)}",
         f"Equivalent 128k windows: {windows.get('128k', 0)}",
         f"Equivalent 1m windows: {windows.get('1m', 0)}",
@@ -431,16 +431,18 @@ def _token_stats_summary(report: dict[str, Any]) -> dict[str, Any]:
 
 def _token_stats_fields_explainer() -> str:
     """Help epilog explaining what token-stat fields are based on."""
+    claude_cost_per_million = PRICING.get("claude_opus", 0) * 1_000_000
+    gpt5_cost_per_million = PRICING.get("gpt5_latest", 0) * 1_000_000
+
     return (
         "token-stats fields:\n"
-        "jCodeMunch Token Savings\n"
         "------------------------\n"
-        "Cost avoided (Claude Opus): Estimated savings using Claude Opus input pricing (total_tokens_saved × $15 / 1M).\n"
-        "Cost avoided (GPT-5 latest): Estimated savings using GPT-5 latest input pricing (total_tokens_saved × $10 / 1M).\n"
-        "Equivalent 32k windows: How many 32,000-token context windows the saved tokens equal.\n"
-        "Equivalent 128k windows: How many 128,000-token context windows the saved tokens equal.\n"
-        "Equivalent 1m windows: How many 1,000,000-token context windows the saved tokens equal.\n"
-        "Anon ID present: Whether _savings.json has an anonymous install ID for optional community meter sharing.\n"
+        f"   Cost avoided (Claude Opus): Estimated savings using Claude Opus input pricing (total_tokens_saved × ${claude_cost_per_million:.2f} / 1M).\n"
+        f"   Cost avoided (GPT-5 latest): Estimated savings using GPT-5 latest input pricing (total_tokens_saved × ${gpt5_cost_per_million:.2f} / 1M).\n"
+        "   Equivalent 32k windows: How many 32,000-token context windows the saved tokens equal.\n"
+        "   Equivalent 128k windows: How many 128,000-token context windows the saved tokens equal.\n"
+        "   Equivalent 1m windows: How many 1,000,000-token context windows the saved tokens equal.\n"
+        "   Anon ID present: Whether _savings.json has an anonymous install ID for optional community meter sharing.\n"
     )
 
 
