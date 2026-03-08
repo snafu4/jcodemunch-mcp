@@ -89,6 +89,7 @@ LANGUAGE_EXTENSIONS = {
     ".vue": "vue",
     ".ejs": "ejs",
     ".verse": "verse",
+    ".lua": "lua",
 }
 
 
@@ -800,6 +801,26 @@ VERSE_SPEC = LanguageSpec(
 )
 
 
+# Lua specification
+# NOTE: Lua uses a single `function_declaration` node type for all named
+# functions — local, module.method (dot_index_expression), and OOP methods
+# (method_index_expression). Custom extraction is performed by
+# _parse_lua_symbols() in extractor.py, which handles name resolution and
+# method vs. function classification. Fields below are intentionally empty.
+LUA_SPEC = LanguageSpec(
+    ts_language="lua",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
 # Language registry
 LANGUAGE_REGISTRY = {
     "python": PYTHON_SPEC,
@@ -827,6 +848,7 @@ LANGUAGE_REGISTRY = {
     "vue": VUE_SPEC,
     "ejs": EJS_SPEC,
     "verse": VERSE_SPEC,
+    "lua": LUA_SPEC,
 }
 
 logger = logging.getLogger(__name__)
