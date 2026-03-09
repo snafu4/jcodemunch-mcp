@@ -411,10 +411,10 @@ Every tool response includes a `_meta` envelope with timing, token savings, and 
 
 ## Recent Updates
 
-**v1.2.5** — Added `staleness_warning` to `get_repo_outline` when an index is 7+ days old (configurable via `JCODEMUNCH_STALENESS_DAYS`)
-**v1.2.4** — Added `duration_seconds` to `index_folder`/`index_repo` results; improved MCP tool descriptions to mention `JCODEMUNCH_USE_AI_SUMMARIES`; added integration coverage for `asyncio.to_thread` dispatch
-**v1.0.0** — First stable release with a locked MCP interface, stable index schema (v3), and stable symbol model
-**v0.2.31** — Performance release: O(1) symbol lookups for `get_symbol`/`get_symbols` and reduced index read overhead
+- **v1.2.5** — Added `staleness_warning` to `get_repo_outline` when an index is 7+ days old (configurable via `JCODEMUNCH_STALENESS_DAYS`)
+- **v1.2.4** — Added `duration_seconds` to `index_folder`/`index_repo` results; improved MCP tool descriptions to mention `JCODEMUNCH_USE_AI_SUMMARIES`; added integration coverage for `asyncio.to_thread` dispatch
+- **v1.0.0** — First stable release with a locked MCP interface, stable index schema (v3), and stable symbol model
+- **v0.2.31** — Performance release: O(1) symbol lookups for `get_symbol`/`get_symbols` and reduced index read overhead
 
 ---
 
