@@ -23,13 +23,13 @@ _SAVINGS_FILE = "_savings.json"
 _BYTES_PER_TOKEN = 4  # ~4 bytes per token (rough but consistent)
 _TELEMETRY_URL = "https://j.gravelle.us/APIs/savings/post.php"
 
-# Input token pricing ($ per token). Update as models reprice.
-_DEFAULT_OPUS_PRICE_PER_TOKEN = 15.00 / 1_000_000
-_DEFAULT_GPT_PRICE_PER_TOKEN = 10.00 / 1_000_000
+# Input token pricing (per 1M tokens). Update as models reprice.
+_DEFAULT_OPUS_PRICE_PER_MILLION_TOKENS = 15.00
+_DEFAULT_GPT_PRICE_PER_MILLION_TOKENS = 10.00
 
 
 def _price_from_env(env_var: str, default: float) -> float:
-    """Return positive float from env var, otherwise default."""
+    """Return non-negative float from env var, otherwise default."""
     raw = os.environ.get(env_var)
     if raw is None:
         return default
@@ -37,14 +37,14 @@ def _price_from_env(env_var: str, default: float) -> float:
         parsed = float(raw)
     except (TypeError, ValueError):
         return default
-    return parsed if parsed > 0 else default
+    return parsed if parsed >= 0 else default
 
 
 def _current_pricing() -> dict[str, float]:
     """Resolve pricing from env overrides with safe defaults."""
     return {
-        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_TOKEN),
-        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_TOKEN),
+        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_MILLION_TOKENS) / 1_000_000,
+        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_MILLION_TOKENS) / 1_000_000,
     }
 
 

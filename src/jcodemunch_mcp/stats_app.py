@@ -12,12 +12,12 @@ from typing import Any
 
 _BYTES_PER_TOKEN = 4
 _SAVINGS_FILE = "_savings.json"
-_DEFAULT_OPUS_PRICE_PER_TOKEN = 15.00 / 1_000_000
-_DEFAULT_GPT_PRICE_PER_TOKEN = 10.00 / 1_000_000
+_DEFAULT_OPUS_PRICE_PER_MILLION_TOKENS = 15.00
+_DEFAULT_GPT_PRICE_PER_MILLION_TOKENS = 10.00
 
 
 def _price_from_env(env_var: str, default: float) -> float:
-    """Return positive float from env var, otherwise default."""
+    """Return non-negative float from env var, otherwise default."""
     raw = os.environ.get(env_var)
     if raw is None:
         return default
@@ -25,14 +25,19 @@ def _price_from_env(env_var: str, default: float) -> float:
         parsed = float(raw)
     except (TypeError, ValueError):
         return default
-    return parsed if parsed > 0 else default
+    return parsed if parsed >= 0 else default
 
 
 def _current_pricing() -> dict[str, float]:
     return {
-        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_TOKEN),
-        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_TOKEN),
+        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_MILLION_TOKENS) / 1_000_000,
+        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_MILLION_TOKENS) / 1_000_000,
     }
+
+
+def _per_million_token_prices(pricing_per_token: dict[str, float]) -> dict[str, float]:
+    """Convert USD/token rates into USD per 1M tokens for display."""
+    return {model: round(rate * 1_000_000, 4) for model, rate in pricing_per_token.items()}
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang=\"en\">
@@ -64,10 +69,19 @@ HTML_TEMPLATE = """<!doctype html>
   </section>
 
   <section class=\"card\" style=\"margin-top: 1rem;\">
-    <h2>Estimated cost avoided (USD)</h2>
+    <h2>Estimated cost avoided</h2>
     <table>
       <thead><tr><th>Model</th><th>Cost avoided</th></tr></thead>
       <tbody id=\"costs\"></tbody>
+    </table>
+  </section>
+
+  <section class=\"card\" style=\"margin-top: 1rem;\">
+    <h2>Pricing used in calculations (per 1M tokens)</h2>
+    <div class=\"muted\">Values come from <code>JCODEMUNCH_OPUS_PRICE</code> and <code>JCODEMUNCH_GPT_PRICE</code> (stored internally as per-token rates).</div>
+    <table>
+      <thead><tr><th>Model</th><th>Price / 1M tokens</th></tr></thead>
+      <tbody id=\"prices\"></tbody>
     </table>
   </section>
 
@@ -101,6 +115,14 @@ async function loadStats() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${model}</td><td>${fmtMoney(value)}</td>`;
     tbody.appendChild(tr);
+  }
+
+  const priceBody = document.getElementById('prices');
+  priceBody.innerHTML = '';
+  for (const [model, value] of Object.entries(data.pricing_usd_per_million_tokens || {})) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${model}</td><td>${fmtMoney(value)}</td>`;
+    priceBody.appendChild(tr);
   }
 }
 
@@ -145,6 +167,7 @@ def build_stats_payload(base_path: str | None = None) -> dict[str, Any]:
         "total_tokens_saved": total_tokens_saved,
         "approx_raw_bytes_avoided": total_tokens_saved * _BYTES_PER_TOKEN,
         "pricing_usd_per_token": pricing,
+        "pricing_usd_per_million_tokens": _per_million_token_prices(pricing),
         "total_cost_avoided": {
             model: round(total_tokens_saved * rate, 4)
             for model, rate in pricing.items()

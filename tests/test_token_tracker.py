@@ -48,14 +48,14 @@ def test_record_savings_reads_cp1252_file(tmp_path):
 
 def test_get_savings_report_price_env_overrides(monkeypatch, tmp_path):
     monkeypatch.setenv("CODE_INDEX_PATH", str(tmp_path))
-    monkeypatch.setenv("JCODEMUNCH_OPUS_PRICE", "0.00002")
-    monkeypatch.setenv("JCODEMUNCH_GPT_PRICE", "0.00003")
+    monkeypatch.setenv("JCODEMUNCH_OPUS_PRICE", "20")
+    monkeypatch.setenv("JCODEMUNCH_GPT_PRICE", "30")
     (tmp_path / "_savings.json").write_text('{"total_tokens_saved": 1000000}')
 
     report = TOKEN_TRACKER.get_savings_report()
 
-    assert report["pricing_usd_per_token"]["claude_opus"] == 0.00002
-    assert report["pricing_usd_per_token"]["gpt5_latest"] == 0.00003
+    assert report["pricing_usd_per_token"]["claude_opus"] == 20 / 1_000_000
+    assert report["pricing_usd_per_token"]["gpt5_latest"] == 30 / 1_000_000
     assert report["total_cost_avoided"]["claude_opus"] == 20.0
     assert report["total_cost_avoided"]["gpt5_latest"] == 30.0
 
@@ -63,10 +63,21 @@ def test_get_savings_report_price_env_overrides(monkeypatch, tmp_path):
 def test_get_savings_report_invalid_price_env_falls_back(monkeypatch, tmp_path):
     monkeypatch.setenv("CODE_INDEX_PATH", str(tmp_path))
     monkeypatch.setenv("JCODEMUNCH_OPUS_PRICE", "not-a-number")
-    monkeypatch.setenv("JCODEMUNCH_GPT_PRICE", "0")
+    monkeypatch.setenv("JCODEMUNCH_GPT_PRICE", "-1")
     (tmp_path / "_savings.json").write_text('{"total_tokens_saved": 1}')
 
     report = TOKEN_TRACKER.get_savings_report()
 
     assert report["pricing_usd_per_token"]["claude_opus"] == 15.00 / 1_000_000
     assert report["pricing_usd_per_token"]["gpt5_latest"] == 10.00 / 1_000_000
+
+
+def test_get_savings_report_zero_price_env_is_allowed(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODE_INDEX_PATH", str(tmp_path))
+    monkeypatch.setenv("JCODEMUNCH_GPT_PRICE", "0")
+    (tmp_path / "_savings.json").write_text('{"total_tokens_saved": 10}')
+
+    report = TOKEN_TRACKER.get_savings_report()
+
+    assert report["pricing_usd_per_token"]["gpt5_latest"] == 0
+    assert report["total_cost_avoided"]["gpt5_latest"] == 0
