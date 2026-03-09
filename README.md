@@ -139,83 +139,18 @@ Verify:
 jcodemunch-mcp --help
 ```
 
-Quick token-insight report from local savings data:
+View token savings in a separate web dashboard:
 
 ```bash
-jcodemunch-mcp --token-stats
+jcodemunch-stats-app --host 127.0.0.1 --port 8765
 ```
 
-Show the same summary in JSON:
+Then open `http://127.0.0.1:8765` in your browser. The dashboard polls `/api/stats` every few seconds and renders totals, context-window equivalents, pricing, and per-model cost avoidance from the local `_savings.json` file.
+
+If you installed with `uv tool install "jcodemunch-mcp @ git+https://github.com/snafu4/jcodemunch-mcp.git"`, run the same command directly from your shell:
 
 ```bash
-jcodemunch-mcp --token-stats --output-format json
-```
-
-Need the full report (includes pricing map, telemetry flags, and savings file path)?
-
-```bash
-jcodemunch-mcp --token-stats-all
-```
-
-Full report in JSON:
-
-```bash
-jcodemunch-mcp --token-stats-all --output-format json
-```
-
-Example full JSON output (`--token-stats-all --output-format json`):
-
-```json
-{
-  "total_tokens_saved": 12345,
-  "approx_raw_bytes_avoided": 49380,
-  "pricing_usd_per_token": {
-    "claude_opus": 0.000015,
-    "gpt5_latest": 0.00001
-  },
-  "total_cost_avoided": {
-    "claude_opus": 0.1852,
-    "gpt5_latest": 0.1235
-  },
-  "equivalent_context_windows": {
-    "32k": 0.39,
-    "128k": 0.1,
-    "1m": 0.0123
-  },
-  "telemetry_enabled": true,
-  "anon_id_present": true,
-  "savings_file": "/home/user/.code-index/_savings.json"
-}
-```
-Text output uses Rich styling when available and falls back to plain terminal text automatically.
-
-Prefer a non-JSON, terminal-friendly summary? (`--output-format` defaults to `text`)
-
-```bash
-jcodemunch-mcp --token-stats
-```
-
-For the full text report (includes telemetry + savings file):
-
-```bash
-jcodemunch-mcp --token-stats-all
-```
-
-Example full text output:
-
-```text
-jCodeMunch Token Savings
-------------------------
-Total tokens saved: 12,345
-Approx raw bytes avoided: 49,380
-Cost avoided (Claude Opus): $0.1852
-Cost avoided (GPT-5 latest): $0.1235
-Equivalent 32k windows: 0.39
-Equivalent 128k windows: 0.1
-Equivalent 1m windows: 0.0123
-Telemetry: enabled
-Anon ID present: yes
-Savings file: /home/user/.code-index/_savings.json
+jcodemunch-stats-app --host 127.0.0.1 --port 8765
 ```
 
 
