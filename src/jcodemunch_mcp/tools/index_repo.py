@@ -2,15 +2,19 @@
 
 import asyncio
 import hashlib
+import logging
 import os
+import time
 from collections import defaultdict
 from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 from ..parser import parse_file, LANGUAGE_EXTENSIONS, get_language_for_path
-from ..security import is_secret_file, is_binary_extension, get_max_index_files, SKIP_PATTERNS
+from ..security import is_secret_file, is_binary_extension, get_max_index_files, get_extra_ignore_patterns, SKIP_PATTERNS
 from ..storage import IndexStore
 from ..summarizer import summarize_symbols, generate_file_summaries
 
@@ -82,7 +86,8 @@ def discover_source_files(
     tree_entries: list[dict],
     gitignore_content: Optional[str] = None,
     max_files: Optional[int] = None,
-    max_size: int = 500 * 1024  # 500KB
+    max_size: int = 500 * 1024,  # 500KB
+    extra_ignore_patterns: Optional[list] = None,
 ) -> tuple[list[str], bool]:
     """Discover source files from tree entries.
     
@@ -97,7 +102,7 @@ def discover_source_files(
     import pathspec
 
     max_files = get_max_index_files(max_files)
-    
+
     # Parse gitignore if provided
     gitignore_spec = None
     if gitignore_content:
@@ -108,17 +113,26 @@ def discover_source_files(
             )
         except Exception:
             pass
-    
+
+    # Merge env-var global patterns with per-call patterns
+    effective_extra = get_extra_ignore_patterns(extra_ignore_patterns)
+    extra_spec = None
+    if effective_extra:
+        try:
+            extra_spec = pathspec.PathSpec.from_lines("gitignore", effective_extra)
+        except Exception:
+            pass
+
     files = []
-    
+
     for entry in tree_entries:
         # Type filter - only blobs (files)
         if entry.get("type") != "blob":
             continue
-        
+
         path = entry.get("path", "")
         size = entry.get("size", 0)
-        
+
         # Extension filter
         _, ext = os.path.splitext(path)
         if get_language_for_path(path) is None:
@@ -135,15 +149,19 @@ def discover_source_files(
         # Binary extension check
         if is_binary_extension(path):
             continue
-        
+
         # Size limit
         if size > max_size:
             continue
-        
+
         # Gitignore matching
         if gitignore_spec and gitignore_spec.match_file(path):
             continue
-        
+
+        # Extra ignore patterns (env-var + per-call)
+        if extra_spec and extra_spec.match_file(path):
+            continue
+
         files.append(path)
     
     truncated = len(files) > max_files
@@ -237,6 +255,7 @@ async def index_repo(
     github_token: Optional[str] = None,
     storage_path: Optional[str] = None,
     incremental: bool = True,
+    extra_ignore_patterns: Optional[list] = None,
 ) -> dict:
     """Index a GitHub repository.
     
@@ -254,15 +273,18 @@ async def index_repo(
         owner, repo = parse_github_url(url)
     except ValueError as e:
         return {"success": False, "error": str(e)}
-    
+
+    logger.info("index_repo start — repo: %s/%s, incremental: %s", owner, repo, incremental)
+
     # Get GitHub token from env if not provided
     if not github_token:
         github_token = os.environ.get("GITHUB_TOKEN")
-    
+
     warnings = []
     max_files = get_max_index_files()
-    
+
     try:
+        t0 = time.monotonic()
         # Fetch tree
         try:
             tree_entries = await fetch_repo_tree(owner, repo, github_token)
@@ -281,11 +303,14 @@ async def index_repo(
             tree_entries,
             gitignore_content,
             max_files=max_files,
+            extra_ignore_patterns=extra_ignore_patterns,
         )
         
+        logger.info("index_repo discovery — %d source files (truncated=%s)", len(source_files), truncated)
+
         if not source_files:
             return {"success": False, "error": "No source files found"}
-        
+
         # Fetch all file contents concurrently
         semaphore = asyncio.Semaphore(10)  # Limit concurrent requests
 
@@ -310,15 +335,34 @@ async def index_repo(
 
         # Incremental path
         existing_index = store.load_index(owner, repo)
+
+        if existing_index is None and store.has_index(owner, repo):
+            logger.warning(
+                "index_repo version_mismatch — %s/%s: on-disk index is a newer version; full re-index required",
+                owner, repo,
+            )
+            warnings.append(
+                "Existing index was created by a newer version of jcodemunch-mcp "
+                "and cannot be read — performing a full re-index. "
+                "If you downgraded the package, delete ~/.code-index/ (or your "
+                "CODE_INDEX_PATH directory) to remove the stale index."
+            )
+
         if incremental and existing_index is not None:
             changed, new, deleted = store.detect_changes(owner, repo, current_files)
+            logger.info(
+                "index_repo incremental — changed: %d, new: %d, deleted: %d",
+                len(changed), len(new), len(deleted),
+            )
 
             if not changed and not new and not deleted:
+                logger.info("index_repo incremental — no changes detected, skipping save")
                 return {
                     "success": True,
                     "message": "No changes detected",
                     "repo": f"{owner}/{repo}",
                     "changed": 0, "new": 0, "deleted": 0,
+                    "duration_seconds": round(time.monotonic() - t0, 2),
                 }
 
             files_to_parse = set(changed) | set(new)
@@ -368,6 +412,7 @@ async def index_repo(
                 "changed": len(changed), "new": len(new), "deleted": len(deleted),
                 "symbol_count": len(updated.symbols) if updated else 0,
                 "indexed_at": updated.indexed_at if updated else "",
+                "duration_seconds": round(time.monotonic() - t0, 2),
                 "no_symbols_count": len(incremental_no_symbols),
                 "no_symbols_files": incremental_no_symbols[:50],
             }
@@ -376,6 +421,7 @@ async def index_repo(
             return result
 
         # Full index path
+        logger.info("index_repo full — parsing %d files", len(current_files))
         all_symbols = []
         symbols_by_file: dict[str, list] = defaultdict(list)
         source_file_list = sorted(current_files)
@@ -396,6 +442,11 @@ async def index_repo(
             except Exception:
                 warnings.append(f"Failed to parse {path}")
                 continue
+
+        logger.info(
+            "index_repo parsing complete — with symbols: %d, no symbols: %d",
+            len(symbols_by_file), len(no_symbols_files),
+        )
 
         # Generate summaries
         if all_symbols:
@@ -439,9 +490,15 @@ async def index_repo(
             "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": source_file_list[:20],  # Limit files in response
+            "duration_seconds": round(time.monotonic() - t0, 2),
             "no_symbols_count": len(no_symbols_files),
             "no_symbols_files": no_symbols_files[:50],
         }
+
+        logger.info(
+            "index_repo complete — repo: %s/%s, files: %d, symbols: %d",
+            owner, repo, len(source_file_list), len(all_symbols),
+        )
 
         if warnings:
             result["warnings"] = warnings
@@ -450,6 +507,7 @@ async def index_repo(
             result["warnings"] = warnings + [f"Repository has many files; indexed first {max_files}"]
 
         return result
-    
+
     except Exception as e:
+        logger.error("index_repo failed — %s/%s: %s", owner, repo, e, exc_info=True)
         return {"success": False, "error": f"Indexing failed: {str(e)}"}

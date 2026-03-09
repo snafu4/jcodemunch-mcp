@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import os
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -20,7 +21,8 @@ from ..security import (
     is_binary_file,
     should_exclude_file,
     DEFAULT_MAX_FILE_SIZE,
-    get_max_index_files,
+    get_max_folder_files,
+    get_extra_ignore_patterns,
     SKIP_PATTERNS,
 )
 from ..storage import IndexStore
@@ -53,6 +55,43 @@ def _load_gitignore(folder_path: Path) -> Optional[pathspec.PathSpec]:
         except Exception:
             pass
     return None
+
+
+def _load_all_gitignores(root: Path) -> dict[Path, pathspec.PathSpec]:
+    """Load all .gitignore files in the tree, keyed by their directory.
+
+    Supports monorepos and poncho-style projects where subdirectories each
+    have their own .gitignore (e.g. cap/.gitignore, core/.gitignore).
+
+    Uses os.walk(followlinks=False) to avoid infinite loops caused by
+    NTFS junctions or symlinks pointing back to ancestor directories.
+    """
+    specs: dict[Path, pathspec.PathSpec] = {}
+    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False):
+        if ".gitignore" in filenames:
+            gitignore_path = Path(dirpath) / ".gitignore"
+            try:
+                content = gitignore_path.read_text(encoding="utf-8", errors="replace")
+                spec = pathspec.PathSpec.from_lines("gitignore", content.splitlines())
+                specs[gitignore_path.parent.resolve()] = spec
+            except Exception:
+                pass
+    return specs
+
+
+def _is_gitignored(file_path: Path, gitignore_specs: dict[Path, pathspec.PathSpec]) -> bool:
+    """Check if a file is excluded by any .gitignore in its ancestor chain.
+
+    Each spec is applied relative to its own directory, matching standard git behaviour.
+    """
+    for gitignore_dir, spec in gitignore_specs.items():
+        try:
+            rel = file_path.relative_to(gitignore_dir)
+            if spec.match_file(rel.as_posix()):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _local_repo_name(folder_path: Path) -> str:
@@ -113,7 +152,7 @@ def discover_local_files(
     Returns:
         Tuple of (list of Path objects for source files, list of warning strings).
     """
-    max_files = get_max_index_files(max_files)
+    max_files = get_max_folder_files(max_files)
     files = []
     warnings = []
     root = folder_path.resolve()
@@ -133,21 +172,26 @@ def discover_local_files(
         "file_limit": 0,
     }
 
-    # Load .gitignore
-    gitignore_spec = _load_gitignore(root)
+    # Load all .gitignore files in the tree (root + all subdirectories)
+    gitignore_specs = _load_all_gitignores(root)
 
-    # Build extra ignore spec if provided
+    # Merge env-var global patterns with per-call patterns, then build spec
+    effective_extra = get_extra_ignore_patterns(extra_ignore_patterns)
     extra_spec = None
-    if extra_ignore_patterns:
+    if effective_extra:
         try:
-            extra_spec = pathspec.PathSpec.from_lines("gitignore", extra_ignore_patterns)
+            extra_spec = pathspec.PathSpec.from_lines("gitignore", effective_extra)
         except Exception:
             pass
 
-    for file_path in folder_path.rglob("*"):
-        # Skip directories
-        if not file_path.is_file():
-            continue
+    # Use os.walk with followlinks=False to avoid infinite loops caused by
+    # NTFS junctions or symlinks pointing back to ancestor directories.
+    raw_walk = (
+        Path(dirpath) / filename
+        for dirpath, dirnames, filenames in os.walk(str(folder_path), followlinks=False)
+        for filename in filenames
+    )
+    for file_path in raw_walk:
 
         # Symlink protection
         if not follow_symlinks and file_path.is_symlink():
@@ -179,8 +223,8 @@ def discover_local_files(
             logger.debug("SKIP skip_pattern: %s", rel_path)
             continue
 
-        # .gitignore matching
-        if gitignore_spec and gitignore_spec.match_file(rel_path):
+        # .gitignore matching (root + all nested .gitignore files)
+        if gitignore_specs and _is_gitignored(file_path.resolve(), gitignore_specs):
             skip_counts["gitignore"] += 1
             logger.debug("SKIP gitignore: %s", rel_path)
             continue
@@ -286,9 +330,10 @@ def index_folder(
         return {"success": False, "error": f"Path is not a directory: {path}"}
 
     warnings = []
-    max_files = get_max_index_files()
+    max_files = get_max_folder_files()
 
     try:
+        t0 = time.monotonic()
         # Discover source files (with security filtering)
         source_files, discover_warnings, skip_counts = discover_local_files(
             folder_path,
@@ -307,6 +352,18 @@ def index_folder(
         owner = "local"
         store = IndexStore(base_path=storage_path)
         existing_index = store.load_index(owner, repo_name)
+
+        if existing_index is None and store.has_index(owner, repo_name):
+            logger.warning(
+                "index_folder version_mismatch — %s/%s: on-disk index is a newer version; full re-index required",
+                owner, repo_name,
+            )
+            warnings.append(
+                "Existing index was created by a newer version of jcodemunch-mcp "
+                "and cannot be read — performing a full re-index. "
+                "If you downgraded the package, delete ~/.code-index/ (or your "
+                "CODE_INDEX_PATH directory) to remove the stale index."
+            )
 
         # Read all files to build current_files map
         current_files: dict[str, str] = {}
@@ -339,6 +396,7 @@ def index_folder(
                     "repo": f"{owner}/{repo_name}",
                     "folder_path": str(folder_path),
                     "changed": 0, "new": 0, "deleted": 0,
+                    "duration_seconds": round(time.monotonic() - t0, 2),
                 }
 
             # Parse only changed + new files
@@ -401,6 +459,7 @@ def index_folder(
                 "changed": len(changed), "new": len(new), "deleted": len(deleted),
                 "symbol_count": len(updated.symbols) if updated else 0,
                 "indexed_at": updated.indexed_at if updated else "",
+                "duration_seconds": round(time.monotonic() - t0, 2),
                 "discovery_skip_counts": skip_counts,
                 "no_symbols_count": len(incremental_no_symbols),
                 "no_symbols_files": incremental_no_symbols[:50],
@@ -483,6 +542,7 @@ def index_folder(
             "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": source_file_list[:20],  # Limit files in response
+            "duration_seconds": round(time.monotonic() - t0, 2),
             "discovery_skip_counts": skip_counts,
             "no_symbols_count": len(no_symbols_files),
             "no_symbols_files": no_symbols_files[:50],  # Show up to 50 for inspection

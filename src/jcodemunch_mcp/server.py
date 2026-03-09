@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -26,6 +27,17 @@ from .tools.get_repo_outline import get_repo_outline
 from .storage.token_tracker import get_savings_report
 
 
+logger = logging.getLogger(__name__)
+
+
+def _default_use_ai_summaries() -> bool:
+    """Return the default for use_ai_summaries, respecting JCODEMUNCH_USE_AI_SUMMARIES env var."""
+    val = os.environ.get("JCODEMUNCH_USE_AI_SUMMARIES", "").strip().lower()
+    if val in ("0", "false", "no", "off"):
+        return False
+    return True  # default on
+
+
 # Create server
 server = Server("jcodemunch-mcp")
 
@@ -43,7 +55,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="index_repo",
-            description="Index a GitHub repository's source code. Fetches files, parses ASTs, extracts symbols, and saves to local storage.",
+            description="Index a GitHub repository's source code. Fetches files, parses ASTs, extracts symbols, and saves to local storage. Set JCODEMUNCH_USE_AI_SUMMARIES=false to disable AI summaries globally.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -56,6 +68,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Use AI to generate symbol summaries (requires ANTHROPIC_API_KEY or GOOGLE_API_KEY). Anthropic takes priority if both are set. When false, uses docstrings or signature fallback.",
                         "default": True
                     },
+                    "extra_ignore_patterns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional gitignore-style patterns to exclude from indexing (merged with JCODEMUNCH_EXTRA_IGNORE_PATTERNS env var)"
+                    },
                     "incremental": {
                         "type": "boolean",
                         "description": "When true and an existing index exists, only re-index changed files.",
@@ -67,7 +84,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="index_folder",
-            description="Index a local folder containing source code. Response includes `discovery_skip_counts` (files filtered per reason), `no_symbols_count`/`no_symbols_files` (files with no extractable symbols) for diagnosing missing files.",
+            description="Index a local folder containing source code. Response includes `discovery_skip_counts` (files filtered per reason), `no_symbols_count`/`no_symbols_files` (files with no extractable symbols) for diagnosing missing files. Set JCODEMUNCH_USE_AI_SUMMARIES=false to disable AI summaries globally.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -83,7 +100,7 @@ async def list_tools() -> list[Tool]:
                     "extra_ignore_patterns": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Additional gitignore-style patterns to exclude from indexing"
+                        "description": "Additional gitignore-style patterns to exclude from indexing (merged with JCODEMUNCH_EXTRA_IGNORE_PATTERNS env var)"
                     },
                     "follow_symlinks": {
                         "type": "boolean",
@@ -248,7 +265,7 @@ async def list_tools() -> list[Tool]:
                     "language": {
                         "type": "string",
                         "description": "Optional filter by language",
-                        "enum": ["python", "javascript", "typescript", "tsx", "go", "rust", "java", "php", "dart", "csharp", "c", "cpp", "swift", "elixir", "ruby", "perl", "gdscript", "blade"]
+                        "enum": ["python", "javascript", "typescript", "tsx", "go", "rust", "java", "php", "dart", "csharp", "c", "cpp", "swift", "elixir", "ruby", "perl", "gdscript", "blade", "kotlin", "scala", "haskell", "julia", "r", "lua", "bash", "css", "sql", "toml", "erlang", "fortran"]
                     },
                     "max_results": {
                         "type": "integer",
@@ -326,89 +343,124 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls."""
     storage_path = os.environ.get("CODE_INDEX_PATH")
-    
+    logger.info("tool_call: %s args=%s", name, {k: v for k, v in arguments.items() if k != "content"})
+
     try:
         if name == "index_repo":
             result = await index_repo(
                 url=arguments["url"],
-                use_ai_summaries=arguments.get("use_ai_summaries", True),
+                use_ai_summaries=arguments.get("use_ai_summaries", _default_use_ai_summaries()),
                 storage_path=storage_path,
                 incremental=arguments.get("incremental", True),
+                extra_ignore_patterns=arguments.get("extra_ignore_patterns"),
             )
         elif name == "index_folder":
-            result = index_folder(
-                path=arguments["path"],
-                use_ai_summaries=arguments.get("use_ai_summaries", True),
-                storage_path=storage_path,
-                extra_ignore_patterns=arguments.get("extra_ignore_patterns"),
-                follow_symlinks=arguments.get("follow_symlinks", False),
-                incremental=arguments.get("incremental", True),
+            _ai = arguments.get("use_ai_summaries", _default_use_ai_summaries())
+            result = await asyncio.to_thread(
+                functools.partial(
+                    index_folder,
+                    path=arguments["path"],
+                    use_ai_summaries=_ai,
+                    storage_path=storage_path,
+                    extra_ignore_patterns=arguments.get("extra_ignore_patterns"),
+                    follow_symlinks=arguments.get("follow_symlinks", False),
+                    incremental=arguments.get("incremental", True),
+                )
             )
         elif name == "list_repos":
-            result = list_repos(storage_path=storage_path)
+            result = await asyncio.to_thread(
+                functools.partial(list_repos, storage_path=storage_path)
+            )
         elif name == "get_file_tree":
-            result = get_file_tree(
-                repo=arguments["repo"],
-                path_prefix=arguments.get("path_prefix", ""),
-                include_summaries=arguments.get("include_summaries", False),
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_file_tree,
+                    repo=arguments["repo"],
+                    path_prefix=arguments.get("path_prefix", ""),
+                    include_summaries=arguments.get("include_summaries", False),
+                    storage_path=storage_path,
+                )
             )
         elif name == "get_file_outline":
-            result = get_file_outline(
-                repo=arguments["repo"],
-                file_path=arguments["file_path"],
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_file_outline,
+                    repo=arguments["repo"],
+                    file_path=arguments["file_path"],
+                    storage_path=storage_path,
+                )
             )
         elif name == "get_file_content":
-            result = get_file_content(
-                repo=arguments["repo"],
-                file_path=arguments["file_path"],
-                start_line=arguments.get("start_line"),
-                end_line=arguments.get("end_line"),
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_file_content,
+                    repo=arguments["repo"],
+                    file_path=arguments["file_path"],
+                    start_line=arguments.get("start_line"),
+                    end_line=arguments.get("end_line"),
+                    storage_path=storage_path,
+                )
             )
         elif name == "get_symbol":
-            result = get_symbol(
-                repo=arguments["repo"],
-                symbol_id=arguments["symbol_id"],
-                verify=arguments.get("verify", False),
-                context_lines=arguments.get("context_lines", 0),
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_symbol,
+                    repo=arguments["repo"],
+                    symbol_id=arguments["symbol_id"],
+                    verify=arguments.get("verify", False),
+                    context_lines=arguments.get("context_lines", 0),
+                    storage_path=storage_path,
+                )
             )
         elif name == "get_symbols":
-            result = get_symbols(
-                repo=arguments["repo"],
-                symbol_ids=arguments["symbol_ids"],
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_symbols,
+                    repo=arguments["repo"],
+                    symbol_ids=arguments["symbol_ids"],
+                    storage_path=storage_path,
+                )
             )
         elif name == "search_symbols":
-            result = search_symbols(
-                repo=arguments["repo"],
-                query=arguments["query"],
-                kind=arguments.get("kind"),
-                file_pattern=arguments.get("file_pattern"),
-                language=arguments.get("language"),
-                max_results=arguments.get("max_results", 10),
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    search_symbols,
+                    repo=arguments["repo"],
+                    query=arguments["query"],
+                    kind=arguments.get("kind"),
+                    file_pattern=arguments.get("file_pattern"),
+                    language=arguments.get("language"),
+                    max_results=arguments.get("max_results", 10),
+                    storage_path=storage_path,
+                )
             )
         elif name == "invalidate_cache":
-            result = invalidate_cache(
-                repo=arguments["repo"],
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    invalidate_cache,
+                    repo=arguments["repo"],
+                    storage_path=storage_path,
+                )
             )
         elif name == "search_text":
-            result = search_text(
-                repo=arguments["repo"],
-                query=arguments["query"],
-                file_pattern=arguments.get("file_pattern"),
-                max_results=arguments.get("max_results", 20),
-                context_lines=arguments.get("context_lines", 0),
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    search_text,
+                    repo=arguments["repo"],
+                    query=arguments["query"],
+                    file_pattern=arguments.get("file_pattern"),
+                    max_results=arguments.get("max_results", 20),
+                    context_lines=arguments.get("context_lines", 0),
+                    storage_path=storage_path,
+                )
             )
         elif name == "get_repo_outline":
-            result = get_repo_outline(
-                repo=arguments["repo"],
-                storage_path=storage_path
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_repo_outline,
+                    repo=arguments["repo"],
+                    storage_path=storage_path,
+                )
             )
         else:
             result = {"error": f"Unknown tool: {name}"}
@@ -428,6 +480,12 @@ async def run_server():
     import sys
     from mcp.server.stdio import stdio_server
     print(f"jcodemunch-mcp {__version__} by jgravelle · https://github.com/jgravelle/jcodemunch-mcp", file=sys.stderr)
+    logger.info(
+        "startup version=%s storage=%s ai_summaries=%s",
+        __version__,
+        os.environ.get("CODE_INDEX_PATH", "~/.code-index/"),
+        _default_use_ai_summaries(),
+    )
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
