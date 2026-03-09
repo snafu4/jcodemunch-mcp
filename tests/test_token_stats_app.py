@@ -27,6 +27,8 @@ def test_build_stats_payload_price_env_overrides(monkeypatch, tmp_path: Path) ->
 
     assert payload["pricing_usd_per_token"]["claude_opus"] == 0.00002
     assert payload["pricing_usd_per_token"]["gpt5_latest"] == 0.00003
+    assert payload["pricing_usd_per_million_tokens"]["claude_opus"] == 20.0
+    assert payload["pricing_usd_per_million_tokens"]["gpt5_latest"] == 30.0
     assert payload["total_cost_avoided"]["claude_opus"] == 20.0
     assert payload["total_cost_avoided"]["gpt5_latest"] == 30.0
 

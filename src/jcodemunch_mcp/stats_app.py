@@ -34,6 +34,11 @@ def _current_pricing() -> dict[str, float]:
         "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_TOKEN),
     }
 
+
+def _per_million_token_prices(pricing_per_token: dict[str, float]) -> dict[str, float]:
+    """Convert USD/token rates into USD per 1M tokens for display."""
+    return {model: round(rate * 1_000_000, 4) for model, rate in pricing_per_token.items()}
+
 HTML_TEMPLATE = """<!doctype html>
 <html lang=\"en\">
 <head>
@@ -72,6 +77,15 @@ HTML_TEMPLATE = """<!doctype html>
   </section>
 
   <section class=\"card\" style=\"margin-top: 1rem;\">
+    <h2>Pricing used in calculations (USD per 1M tokens)</h2>
+    <div class=\"muted\">Values come from <code>JCODEMUNCH_OPUS_PRICE</code> and <code>JCODEMUNCH_GPT_PRICE</code> (stored internally as USD/token).</div>
+    <table>
+      <thead><tr><th>Model</th><th>Price / 1M tokens</th></tr></thead>
+      <tbody id=\"prices\"></tbody>
+    </table>
+  </section>
+
+  <section class=\"card\" style=\"margin-top: 1rem;\">
     <h2>Source</h2>
     <div>Updated: <span id=\"updated\">-</span></div>
     <div class=\"muted\">Savings file: <code id=\"file\">-</code></div>
@@ -101,6 +115,14 @@ async function loadStats() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${model}</td><td>${fmtMoney(value)}</td>`;
     tbody.appendChild(tr);
+  }
+
+  const priceBody = document.getElementById('prices');
+  priceBody.innerHTML = '';
+  for (const [model, value] of Object.entries(data.pricing_usd_per_million_tokens || {})) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${model}</td><td>${fmtMoney(value)}</td>`;
+    priceBody.appendChild(tr);
   }
 }
 
@@ -145,6 +167,7 @@ def build_stats_payload(base_path: str | None = None) -> dict[str, Any]:
         "total_tokens_saved": total_tokens_saved,
         "approx_raw_bytes_avoided": total_tokens_saved * _BYTES_PER_TOKEN,
         "pricing_usd_per_token": pricing,
+        "pricing_usd_per_million_tokens": _per_million_token_prices(pricing),
         "total_cost_avoided": {
             model: round(total_tokens_saved * rate, 4)
             for model, rate in pricing.items()
