@@ -20,7 +20,7 @@ test = ["pytest", "pytest-asyncio", "pytest-cov"]
 
 [project.scripts]
 jcodemunch-mcp = "jcodemunch_mcp.server:main"
-jcodemunch-stats-app = "apps.token_stats_app:main"
+jcodemunch-stats-app = "jcodemunch_mcp.stats_app:main"
 
 [build-system]
 requires = ["hatchling"]

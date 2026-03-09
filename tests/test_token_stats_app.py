@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from apps.token_stats_app import build_stats_payload
+from jcodemunch_mcp.stats_app import build_stats_payload
 
 
 def test_build_stats_payload_reads_saved_totals(tmp_path: Path) -> None:
