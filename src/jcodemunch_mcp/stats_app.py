@@ -12,10 +12,27 @@ from typing import Any
 
 _BYTES_PER_TOKEN = 4
 _SAVINGS_FILE = "_savings.json"
-PRICING = {
-    "claude_opus": 15.00 / 1_000_000,
-    "gpt5_latest": 10.00 / 1_000_000,
-}
+_DEFAULT_OPUS_PRICE_PER_TOKEN = 15.00 / 1_000_000
+_DEFAULT_GPT_PRICE_PER_TOKEN = 10.00 / 1_000_000
+
+
+def _price_from_env(env_var: str, default: float) -> float:
+    """Return positive float from env var, otherwise default."""
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _current_pricing() -> dict[str, float]:
+    return {
+        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_TOKEN),
+        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_TOKEN),
+    }
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang=\"en\">
@@ -122,14 +139,15 @@ def build_stats_payload(base_path: str | None = None) -> dict[str, Any]:
     path = _savings_path(base_path or os.environ.get("CODE_INDEX_PATH"))
     data = _read_savings_data(path)
     total_tokens_saved = max(0, int(data.get("total_tokens_saved", 0) or 0))
+    pricing = _current_pricing()
 
     return {
         "total_tokens_saved": total_tokens_saved,
         "approx_raw_bytes_avoided": total_tokens_saved * _BYTES_PER_TOKEN,
-        "pricing_usd_per_token": PRICING,
+        "pricing_usd_per_token": pricing,
         "total_cost_avoided": {
             model: round(total_tokens_saved * rate, 4)
-            for model, rate in PRICING.items()
+            for model, rate in pricing.items()
         },
         "equivalent_context_windows": {
             "32k": round(total_tokens_saved / 32_000, 2),

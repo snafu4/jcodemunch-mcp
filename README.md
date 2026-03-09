@@ -153,21 +153,6 @@ If you installed with `uv tool install "jcodemunch-mcp @ git+https://github.com/
 jcodemunch-stats-app --host 127.0.0.1 --port 8765
 ```
 
-
-Want a separate web app view for these stats?
-
-```bash
-jcodemunch-stats-app --host 127.0.0.1 --port 8765
-```
-
-Then open `http://127.0.0.1:8765` in your browser. The dashboard polls `/api/stats` every few seconds and renders totals, context-window equivalents, and per-model cost avoidance.
-
-If you installed with `uv tool install "jcodemunch-mcp @ git+https://github.com/snafu4/jcodemunch-mcp.git"`, run the same command directly from your shell:
-
-```bash
-jcodemunch-stats-app --host 127.0.0.1 --port 8765
-```
-
 ---
 
 ## Configure MCP Client
@@ -471,6 +456,8 @@ For **LM Studio**, ensure the Local Server is running (usually on port 1234):
 | `CODE_INDEX_PATH`           | Custom cache path         | No       |
 | `JCODEMUNCH_MAX_INDEX_FILES`| Maximum files to index per repo/folder (default: `10000`) | No |
 | `JCODEMUNCH_SHARE_SAVINGS`  | Set to `0` to disable anonymous community token savings reporting | No       |
+| `JCODEMUNCH_OPUS_PRICE`     | Override Claude Opus input price in USD/token for cost-avoided estimates (default: `0.000015`) | No |
+| `JCODEMUNCH_GPT_PRICE`      | Override GPT input price in USD/token for cost-avoided estimates (default: `0.000010`) | No |
 | `JCODEMUNCH_LOG_LEVEL`      | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`) | No       |
 | `JCODEMUNCH_LOG_FILE`       | Path to log file. If unset, logs go to stderr. Use a file to avoid polluting MCP stdio. | No       |
 
