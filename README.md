@@ -218,6 +218,21 @@ Anon ID present: yes
 Savings file: /home/user/.code-index/_savings.json
 ```
 
+
+Want a separate web app view for these stats?
+
+```bash
+jcodemunch-stats-app --host 127.0.0.1 --port 8765
+```
+
+Then open `http://127.0.0.1:8765` in your browser. The dashboard polls `/api/stats` every few seconds and renders totals, context-window equivalents, and per-model cost avoidance.
+
+If you installed with `uv tool install "jcodemunch-mcp @ git+https://github.com/snafu4/jcodemunch-mcp.git"`, run the same command directly from your shell:
+
+```bash
+jcodemunch-stats-app --host 127.0.0.1 --port 8765
+```
+
 ---
 
 ## Configure MCP Client
