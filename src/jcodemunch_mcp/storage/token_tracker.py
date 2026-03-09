@@ -24,10 +24,28 @@ _BYTES_PER_TOKEN = 4  # ~4 bytes per token (rough but consistent)
 _TELEMETRY_URL = "https://j.gravelle.us/APIs/savings/post.php"
 
 # Input token pricing ($ per token). Update as models reprice.
-PRICING = {
-    "claude_opus":  15.00 / 1_000_000,  # Claude Opus 4.6 — $15.00 / 1M input tokens
-    "gpt5_latest":  10.00 / 1_000_000,  # GPT-5.2 (latest flagship GPT) — $10.00 / 1M input tokens
-}
+_DEFAULT_OPUS_PRICE_PER_TOKEN = 15.00 / 1_000_000
+_DEFAULT_GPT_PRICE_PER_TOKEN = 10.00 / 1_000_000
+
+
+def _price_from_env(env_var: str, default: float) -> float:
+    """Return positive float from env var, otherwise default."""
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _current_pricing() -> dict[str, float]:
+    """Resolve pricing from env overrides with safe defaults."""
+    return {
+        "claude_opus": _price_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_OPUS_PRICE_PER_TOKEN),
+        "gpt5_latest": _price_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_GPT_PRICE_PER_TOKEN),
+    }
 
 
 def _savings_path(base_path: Optional[str] = None) -> Path:
@@ -125,14 +143,15 @@ def get_savings_report(base_path: Optional[str] = None) -> dict[str, Any]:
         "128k": round(total_tokens_saved / 128_000, 2),
         "1m": round(total_tokens_saved / 1_000_000, 4),
     }
+    pricing = _current_pricing()
 
     return {
         "total_tokens_saved": total_tokens_saved,
         "approx_raw_bytes_avoided": approx_raw_bytes_avoided,
-        "pricing_usd_per_token": PRICING,
+        "pricing_usd_per_token": pricing,
         "total_cost_avoided": {
             model: round(total_tokens_saved * rate, 4)
-            for model, rate in PRICING.items()
+            for model, rate in pricing.items()
         },
         "equivalent_context_windows": context_windows,
         "telemetry_enabled": os.environ.get("JCODEMUNCH_SHARE_SAVINGS", "1") != "0",
@@ -160,13 +179,14 @@ def cost_avoided(tokens_saved: int, total_tokens_saved: int) -> dict:
 
     Values are in USD, rounded to 4 decimal places.
     """
+    pricing = _current_pricing()
     return {
         "cost_avoided": {
             model: round(tokens_saved * rate, 4)
-            for model, rate in PRICING.items()
+            for model, rate in pricing.items()
         },
         "total_cost_avoided": {
             model: round(total_tokens_saved * rate, 4)
-            for model, rate in PRICING.items()
+            for model, rate in pricing.items()
         },
     }
