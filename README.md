@@ -411,14 +411,10 @@ Every tool response includes a `_meta` envelope with timing, token savings, and 
 
 ## Recent Updates
 
-**v0.2.10** — Pin `mcp<1.10.0` to prevent Windows `win32api` DLL crash on startup
-**v0.2.9** — Community savings meter: anonymous token savings shared to a live global counter at j.gravelle.us (opt-out via `JCODEMUNCH_SHARE_SAVINGS=0`); updated model pricing (Opus $25/1M, GPT-5 $10/1M)
-**v0.2.8** — Estimated cost avoided added to every `_meta` response (`cost_avoided`, `total_cost_avoided`)
-**v0.2.7** — Security fix: `.claude/` excluded from sdist; structural CI guardrails prevent credential bundling
-**v0.2.5** — Path traversal hardening in `IndexStore`; `jcodemunch-mcp --help` now works
-**v0.2.4** — Live token savings counter (`tokens_saved`, `total_tokens_saved` in every `_meta`)
-**v0.2.3** — Google Gemini Flash support (`GOOGLE_API_KEY`); auto-selects between Anthropic and Gemini
-**v0.2.2** — PHP language support
+- **v1.2.5** — Added `staleness_warning` to `get_repo_outline` when an index is 7+ days old (configurable via `JCODEMUNCH_STALENESS_DAYS`)
+- **v1.2.4** — Added `duration_seconds` to `index_folder`/`index_repo` results; improved MCP tool descriptions to mention `JCODEMUNCH_USE_AI_SUMMARIES`; added integration coverage for `asyncio.to_thread` dispatch
+- **v1.0.0** — First stable release with a locked MCP interface, stable index schema (v3), and stable symbol model
+- **v0.2.31** — Performance release: O(1) symbol lookups for `get_symbol`/`get_symbols` and reduced index read overhead
 
 ---
 
