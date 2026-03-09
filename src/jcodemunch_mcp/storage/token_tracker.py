@@ -23,10 +23,35 @@ _SAVINGS_FILE = "_savings.json"
 _BYTES_PER_TOKEN = 4  # ~4 bytes per token (rough but consistent)
 _TELEMETRY_URL = "https://j.gravelle.us/APIs/savings/post.php"
 
-# Input token pricing ($ per token). Update as models reprice.
+
+# Input token pricing ($ per token).
+# Env overrides (USD per 1M tokens):
+#   JCODEMUNCH_OPUS_PRICE
+#   JCODEMUNCH_GPT_PRICE
+_DEFAULT_PRICING_PER_MTOKEN = {
+    "claude_opus": 15.00,
+    "gpt5_latest": 10.00,
+}
+
+
+def _price_per_token_from_env(var_name: str, default_per_mtoken: float) -> float:
+    """Read a non-negative decimal/integer USD-per-1M-token env value."""
+    raw = os.environ.get(var_name)
+    if raw is None:
+        return default_per_mtoken / 1_000_000
+
+    try:
+        value = float(raw)
+        if value < 0 or value == float("inf") or value == float("-inf") or value != value:
+            raise ValueError
+        return value / 1_000_000
+    except (TypeError, ValueError):
+        return default_per_mtoken / 1_000_000
+
+
 PRICING = {
-    "claude_opus":  15.00 / 1_000_000,  # Claude Opus 4.6 — $15.00 / 1M input tokens
-    "gpt5_latest":  10.00 / 1_000_000,  # GPT-5.2 (latest flagship GPT) — $10.00 / 1M input tokens
+    "claude_opus": _price_per_token_from_env("JCODEMUNCH_OPUS_PRICE", _DEFAULT_PRICING_PER_MTOKEN["claude_opus"]),
+    "gpt5_latest": _price_per_token_from_env("JCODEMUNCH_GPT_PRICE", _DEFAULT_PRICING_PER_MTOKEN["gpt5_latest"]),
 }
 
 
@@ -131,7 +156,7 @@ def get_savings_report(base_path: Optional[str] = None) -> dict[str, Any]:
         "approx_raw_bytes_avoided": approx_raw_bytes_avoided,
         "pricing_usd_per_token": PRICING,
         "total_cost_avoided": {
-            model: round(total_tokens_saved * rate, 4)
+            model: round(total_tokens_saved * rate, 2)
             for model, rate in PRICING.items()
         },
         "equivalent_context_windows": context_windows,
@@ -158,15 +183,15 @@ def cost_avoided(tokens_saved: int, total_tokens_saved: int) -> dict:
         cost_avoided:       {claude_opus: float, gpt5_latest: float}
         total_cost_avoided: {claude_opus: float, gpt5_latest: float}
 
-    Values are in USD, rounded to 4 decimal places.
+    Values are in USD, rounded to 2 decimal places.
     """
     return {
         "cost_avoided": {
-            model: round(tokens_saved * rate, 4)
+            model: round(tokens_saved * rate, 2)
             for model, rate in PRICING.items()
         },
         "total_cost_avoided": {
-            model: round(total_tokens_saved * rate, 4)
+            model: round(total_tokens_saved * rate, 2)
             for model, rate in PRICING.items()
         },
     }
