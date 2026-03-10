@@ -400,6 +400,12 @@ See CONTEXT_PROVIDERS.md for the full architecture, dbt details, and guide to wr
 
 ---
 
+## Contributing
+
+PRs welcome! All contributors must sign the [Contributor License Agreement](https://cla-assistant.io/jgravelle/jcodemunch-mcp) before their PR can be merged — CLA Assistant will prompt you automatically. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
+
 ## Security
 
 Built-in protections:
