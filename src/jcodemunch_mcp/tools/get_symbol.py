@@ -5,7 +5,7 @@ import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided as _cost_avoided
+from ..storage import IndexStore, record_savings, estimate_savings, estimate_tokens_used, cost_avoided as _cost_avoided
 from ._utils import resolve_repo
 
 
@@ -90,7 +90,8 @@ def get_symbol(
     except OSError:
         pass
     tokens_saved = estimate_savings(raw_bytes, symbol.get("byte_length", 0))
-    total_saved = record_savings(tokens_saved)
+    tokens_used = estimate_tokens_used(symbol.get("byte_length", 0))
+    total_saved = record_savings(tokens_saved, tokens_used=tokens_used)
     meta["tokens_saved"] = tokens_saved
     meta["total_tokens_saved"] = total_saved
     meta.update(_cost_avoided(tokens_saved, total_saved))
@@ -188,7 +189,8 @@ def get_symbols(
         response_bytes += symbol.get("byte_length", 0)
 
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
-    total_saved = record_savings(tokens_saved)
+    tokens_used = estimate_tokens_used(response_bytes)
+    total_saved = record_savings(tokens_saved, tokens_used=tokens_used)
 
     elapsed = (time.perf_counter() - start) * 1000
 

@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from typing import Optional
 
-from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
+from ..storage import IndexStore, record_savings, estimate_savings, estimate_tokens_used, cost_avoided
 from ._utils import resolve_repo
 
 
@@ -65,7 +65,8 @@ def get_file_tree(
             pass
     response_bytes = len(str(tree).encode())
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
-    total_saved = record_savings(tokens_saved)
+    tokens_used = estimate_tokens_used(response_bytes)
+    total_saved = record_savings(tokens_saved, tokens_used=tokens_used)
 
     return {
         "repo": f"{owner}/{name}",

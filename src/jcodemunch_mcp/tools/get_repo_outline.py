@@ -62,7 +62,7 @@ def get_repo_outline(
         except OSError:
             pass
     tokens_saved = estimate_savings(raw_bytes, 0)
-    total_saved = record_savings(tokens_saved)
+    total_saved = record_savings(tokens_saved, tokens_used=0)
 
     elapsed = (time.perf_counter() - start) * 1000
 

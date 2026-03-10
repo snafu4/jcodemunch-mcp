@@ -326,7 +326,7 @@ Every tool response includes a `_meta` envelope with timing, token savings, and 
 }
 ```
 
-`total_tokens_saved` and `total_cost_avoided` accumulate across all tool calls and persist to `~/.code-index/_savings.json`.
+`total_tokens_saved`, `total_tokens_used`, and `total_cost_avoided` accumulate across all tool calls and persist to `~/.code-index/_savings.json`.
 
 ---
 

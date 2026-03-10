@@ -47,7 +47,9 @@ class _State:
         self._lock = threading.Lock()
         self._loaded = False
         self._total: int = 0          # cumulative total (disk + in-flight)
+        self._total_used: int = 0     # cumulative estimated tokens actually used
         self._unflushed: int = 0      # delta not yet written to disk
+        self._unflushed_used: int = 0 # used-token delta not yet written to disk
         self._call_count: int = 0     # calls since last flush
         self._anon_id: Optional[str] = None
         self._base_path: Optional[str] = None
@@ -64,16 +66,20 @@ class _State:
         except Exception:
             data = {}
         self._total = data.get("total_tokens_saved", 0)
+        self._total_used = data.get("total_tokens_used", 0)
         self._anon_id = data.get("anon_id")
         self._loaded = True
 
-    def add(self, delta: int, base_path: Optional[str]) -> int:
+    def add(self, delta: int, used_delta: int, base_path: Optional[str]) -> int:
         """Add delta to the running total. Returns new cumulative total."""
         with self._lock:
             self._ensure_loaded(base_path)
             delta = max(0, delta)
+            used_delta = max(0, used_delta)
             self._total += delta
+            self._total_used += used_delta
             self._unflushed += delta
+            self._unflushed_used += used_delta
             self._pending_telemetry += delta
             self._call_count += 1
             if self._call_count >= _FLUSH_INTERVAL:
@@ -87,7 +93,7 @@ class _State:
 
     def _flush_locked(self) -> None:
         """Write accumulated total to disk. Must be called with _lock held."""
-        if self._unflushed == 0 and self._loaded:
+        if self._unflushed == 0 and self._unflushed_used == 0 and self._loaded:
             self._call_count = 0
             return
         path = _savings_path(self._base_path)
@@ -102,6 +108,7 @@ class _State:
         else:
             data["anon_id"] = self._anon_id
         data["total_tokens_saved"] = self._total
+        data["total_tokens_used"] = self._total_used
         try:
             path.write_text(json.dumps(data))
         except Exception:
@@ -113,6 +120,7 @@ class _State:
             self._pending_telemetry = 0
 
         self._unflushed = 0
+        self._unflushed_used = 0
         self._call_count = 0
 
     def flush(self) -> None:
@@ -152,12 +160,13 @@ def _share_savings(delta: int, anon_id: str) -> None:
     threading.Thread(target=_post, daemon=True).start()
 
 
-def record_savings(tokens_saved: int, base_path: Optional[str] = None) -> int:
+def record_savings(tokens_saved: int, base_path: Optional[str] = None,
+                   tokens_used: int = 0) -> int:
     """Add tokens_saved to the running total. Returns new cumulative total.
 
     Uses an in-memory accumulator; flushes to disk every 10 calls and at exit.
     """
-    return _state.add(tokens_saved, base_path)
+    return _state.add(tokens_saved, tokens_used, base_path)
 
 
 def get_total_saved(base_path: Optional[str] = None) -> int:
@@ -168,6 +177,11 @@ def get_total_saved(base_path: Optional[str] = None) -> int:
 def estimate_savings(raw_bytes: int, response_bytes: int) -> int:
     """Estimate tokens saved: (raw - response) / bytes_per_token."""
     return max(0, (raw_bytes - response_bytes) // _BYTES_PER_TOKEN)
+
+
+def estimate_tokens_used(response_bytes: int) -> int:
+    """Estimate tokens used from response size in bytes."""
+    return max(0, response_bytes // _BYTES_PER_TOKEN)
 
 
 def cost_avoided(tokens_saved: int, total_tokens_saved: int) -> dict:

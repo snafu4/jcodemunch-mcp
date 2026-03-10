@@ -4,7 +4,7 @@ import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
+from ..storage import IndexStore, record_savings, estimate_savings, estimate_tokens_used, cost_avoided
 from ..parser import build_symbol_tree
 from ._utils import resolve_repo
 
@@ -63,7 +63,7 @@ def get_file_outline(
     if not file_symbols:
         elapsed = (time.perf_counter() - start) * 1000
         tokens_saved = estimate_savings(raw_bytes, 0)
-        total_saved = record_savings(tokens_saved)
+        total_saved = record_savings(tokens_saved, tokens_used=0)
         return {
             "repo": f"{owner}/{name}",
             "file": file_path,
@@ -90,7 +90,8 @@ def get_file_outline(
     elapsed = (time.perf_counter() - start) * 1000
     response_bytes = sum(s.get("byte_length", 0) for s in file_symbols)
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
-    total_saved = record_savings(tokens_saved)
+    tokens_used = estimate_tokens_used(response_bytes)
+    total_saved = record_savings(tokens_saved, tokens_used=tokens_used)
 
     return {
         "repo": f"{owner}/{name}",

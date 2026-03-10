@@ -5,7 +5,7 @@ import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
+from ..storage import IndexStore, record_savings, estimate_savings, estimate_tokens_used, cost_avoided
 from ._utils import resolve_repo
 
 
@@ -107,7 +107,8 @@ def search_text(
     # Token savings: raw bytes of searched files vs grouped match response
     response_bytes = len(json.dumps(results, ensure_ascii=False).encode("utf-8"))
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
-    total_saved = record_savings(tokens_saved)
+    tokens_used = estimate_tokens_used(response_bytes)
+    total_saved = record_savings(tokens_saved, tokens_used=tokens_used)
 
     return {
         "repo": f"{owner}/{name}",
