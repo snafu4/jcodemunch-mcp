@@ -27,6 +27,7 @@ from .tools.get_repo_outline import get_repo_outline
 from .tools.find_importers import find_importers
 from .tools.find_references import find_references
 from .tools.get_session_stats import get_session_stats
+from .tools.get_dependency_graph import get_dependency_graph
 from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
 from .parser.symbols import VALID_KINDS
@@ -433,6 +434,35 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
             }
         ),
+        Tool(
+            name="get_dependency_graph",
+            description="Get the file-level dependency graph for a given file. Traverses import relationships up to 3 hops. Use to understand what a file depends on ('imports'), what depends on it ('importers'), or both. Prerequisite for blast radius analysis.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "File path within the repo (e.g. 'src/server.py')"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "description": "'imports' (files this file depends on), 'importers' (files that depend on this file), or 'both'",
+                        "enum": ["imports", "importers", "both"],
+                        "default": "imports"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Number of hops to traverse (1–3)",
+                        "default": 1
+                    }
+                },
+                "required": ["repo", "file"]
+            }
+        ),
     ]
 
 
@@ -623,6 +653,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = await asyncio.to_thread(
                 functools.partial(
                     get_session_stats,
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_dependency_graph":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_dependency_graph,
+                    repo=arguments["repo"],
+                    file=arguments["file"],
+                    direction=arguments.get("direction", "imports"),
+                    depth=arguments.get("depth", 1),
                     storage_path=storage_path,
                 )
             )
