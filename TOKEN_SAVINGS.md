@@ -1,5 +1,27 @@
 # Token Savings: jCodeMunch MCP
 
+## Third-Party Validation
+
+Independent A/B test by [@Mharbulous](https://github.com/Mharbulous) — 50 iterations, Claude Sonnet 4.6, real Vue 3 + Firebase production codebase. JCodeMunch vs native tools (Grep/Glob/Read) on a naming-audit task.
+
+| Metric | Native | JCodeMunch | Delta |
+|--------|--------|------------|-------|
+| Success rate | 72% | **80%** | +8 pp |
+| Timeout rate | 40% | **32%** | −8 pp |
+| Mean cost/iteration | $0.783 | **$0.738** | −5.7% |
+| Mean cache creation | 104,135 | **93,178** | −10.5% |
+| Mean duration | 318s | **299s** | −6.0% |
+
+**Tool-layer savings (fixed overhead removed): 15–25%.**
+
+The blended 5.7% understates the real advantage because each iteration includes fixed overhead (subagent consensus calls, system prompt) independent of which tool variant runs. Isolating iterations with no findings removes that overhead and exposes the raw tool-layer delta.
+
+One finding category appeared only in the JCodeMunch variant: `find_importers` identified two orphaned files with zero live importers — a structural query native tools cannot answer without scripting.
+
+Full report: [`benchmarks/ab-test-naming-audit-2026-03-18.md`](benchmarks/ab-test-naming-audit-2026-03-18.md)
+
+---
+
 ## Why This Exists
 
 AI agents waste tokens when they must read entire files to locate a single function, class, or constant.

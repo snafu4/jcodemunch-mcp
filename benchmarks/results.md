@@ -93,6 +93,21 @@
 
 ---
 
+## Real-world A/B test: naming audit task (2026-03-18)
+
+50-iteration test by @Mharbulous comparing JCodeMunch vs native tools (Grep/Glob/Read) on a real Vue 3 + Firebase production codebase. Full report: [ab-test-naming-audit-2026-03-18.md](ab-test-naming-audit-2026-03-18.md)
+
+| Metric | Native | JCodeMunch | Delta |
+|--------|--------|------------|-------|
+| Success rate | 72% | 80% | +8 pp |
+| Timeout rate | 40% | 32% | −8 pp |
+| Mean cost/iteration | $0.783 | $0.738 | −5.7% |
+| Mean cache creation | 104,135 | 93,178 | −10.5% |
+
+Tool-layer savings (isolated from fixed overhead): **15–25%**
+
+---
+
 ## Grand Summary
 
 | | Tokens |

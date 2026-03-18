@@ -79,6 +79,23 @@ Recent releases have also made that retrieval workflow sharper and more useful i
 
 ---
 
+## Real-world results
+
+Independent 50-iteration A/B test on a real Vue 3 + Firebase production codebase — JCodeMunch vs native tools (Grep/Glob/Read), Claude Sonnet 4.6, fresh session per iteration:
+
+| Metric | Native | JCodeMunch |
+|--------|--------|------------|
+| Success rate | 72% | **80%** |
+| Timeout rate | 40% | **32%** |
+| Mean cost/iteration | $0.783 | **$0.738** |
+| Mean cache creation | 104,135 | **93,178 (−10.5%)** |
+
+Tool-layer savings isolated from fixed overhead: **15–25%.** One finding category appeared exclusively in the JCodeMunch variant: orphaned file detection via `find_importers` — a structural query native tools cannot answer without scripting.
+
+Full report: [`benchmarks/ab-test-naming-audit-2026-03-18.md`](benchmarks/ab-test-naming-audit-2026-03-18.md)
+
+---
+
 ## Why agents need this
 
 Most agents still inspect codebases like tourists trapped in an airport gift shop:
@@ -115,6 +132,10 @@ Inspect repository structure and file outlines before asking for source.
 ### Lower token spend
 
 Send the model the code it needs, not 1,500 lines of collateral damage.
+
+### Structural queries native tools can't answer
+
+`find_importers` tells you what imports a file. `get_blast_radius` tells you what breaks if you change a symbol. `get_class_hierarchy` traverses inheritance chains. These are not "faster grep" — they are questions grep cannot answer at all.
 
 ### Better engineering workflows
 
