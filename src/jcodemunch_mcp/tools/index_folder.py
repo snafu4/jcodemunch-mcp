@@ -203,7 +203,12 @@ def discover_local_files(
 
         # Resolve once per file — reused for traversal check, relative path,
         # and gitignore matching (was resolved 2-3x before this optimization).
-        resolved = file_path.resolve()
+        try:
+            resolved = file_path.resolve()
+        except OSError:
+            skip_counts["unreadable"] += 1
+            logger.debug("SKIP unreadable (resolve failed): %s", file_path)
+            continue
         resolved_str = str(resolved)
 
         # Path traversal check (same logic as validate_path but avoids
