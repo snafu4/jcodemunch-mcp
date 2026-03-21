@@ -7,6 +7,7 @@ WAL mode enables concurrent readers + single writer with delta writes.
 import json
 import logging
 import os
+import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -107,27 +108,51 @@ class SQLiteIndexStore:
         conn.executescript(_SCHEMA_SQL)
         return conn
 
-    def checkpoint_and_close(self, owner: str, name: str) -> None:
-        """Compact WAL file on graceful shutdown. Call from server shutdown hook."""
-        raise NotImplementedError
-        # Implementation: conn.execute("PRAGMA wal_checkpoint(TRUNCATE)"); conn.close()
-
     def get_file_languages(self, owner: str, name: str) -> dict[str, str]:
         """Query only the files table for path→language mapping.
         Avoids loading the full index when only file_languages is needed."""
-        raise NotImplementedError
-        # Implementation: SELECT path, language FROM files WHERE language != ''
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return {}
+        conn = self._connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT path, language FROM files WHERE language != ''"
+            ).fetchall()
+            return {r["path"]: r["language"] for r in rows}
+        finally:
+            conn.close()
 
     def get_symbol_by_id(self, owner: str, name: str, symbol_id: str) -> Optional[dict]:
         """Query a single symbol by ID directly from SQLite.
         Avoids loading the full index for get_symbol_content."""
-        raise NotImplementedError
-        # Implementation: SELECT * FROM symbols WHERE id = ?
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return None
+        conn = self._connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT * FROM symbols WHERE id = ?", (symbol_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self._row_to_symbol_dict(row)
+        finally:
+            conn.close()
 
     def has_file(self, owner: str, name: str, file_path: str) -> bool:
         """Check if a file exists in the index without loading the full index."""
-        raise NotImplementedError
-        # Implementation: SELECT 1 FROM files WHERE path = ?
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return False
+        conn = self._connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM files WHERE path = ?", (file_path,)
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
 
     # ── Public API (mirrors IndexStore) ─────────────────────────────
 
@@ -399,7 +424,57 @@ class SQLiteIndexStore:
         hash_fn: Callable[[str], str],
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, float]]:
         """Fast-path change detection using mtimes, falling back to hash."""
-        raise NotImplementedError
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            # No existing index — all files are new, hash them all.
+            hashes: dict[str, str] = {}
+            for fp in current_mtimes:
+                hashes[fp] = hash_fn(fp)
+            return [], list(current_mtimes.keys()), [], hashes, dict(current_mtimes)
+
+        conn = self._connect(db_path)
+        try:
+            rows = conn.execute("SELECT path, hash, mtime_ns FROM files").fetchall()
+        finally:
+            conn.close()
+
+        old_hashes = {r["path"]: r["hash"] for r in rows if r["hash"]}
+        old_mtimes = {r["path"]: r["mtime_ns"] for r in rows if r["mtime_ns"] is not None}
+
+        old_set = set(old_hashes.keys())
+        new_set = set(current_mtimes.keys())
+
+        new_files = sorted(new_set - old_set)
+        deleted_files = sorted(old_set - new_set)
+
+        changed_files: list[str] = []
+        computed_hashes: dict[str, str] = {}
+        updated_mtimes: dict[str, float] = {}
+
+        # Check files present in both old and new indexes.
+        for fp in sorted(old_set & new_set):
+            cur_mtime = current_mtimes[fp]
+            old_mtime = old_mtimes.get(fp)
+
+            if old_mtime is not None and cur_mtime == old_mtime:
+                # mtime unchanged — skip hash, file is unchanged.
+                updated_mtimes[fp] = cur_mtime
+                continue
+
+            # mtime differs (or no stored mtime) — compute hash to verify.
+            h = hash_fn(fp)
+            if h != old_hashes[fp]:
+                changed_files.append(fp)
+                computed_hashes[fp] = h
+            # Update mtime regardless.
+            updated_mtimes[fp] = cur_mtime
+
+        # Hash all new files.
+        for fp in new_files:
+            computed_hashes[fp] = hash_fn(fp)
+            updated_mtimes[fp] = current_mtimes[fp]
+
+        return changed_files, new_files, deleted_files, computed_hashes, updated_mtimes
 
     def detect_changes(
         self,
@@ -408,7 +483,8 @@ class SQLiteIndexStore:
         current_files: dict[str, str],
     ) -> tuple[list[str], list[str], list[str]]:
         """Detect changed, new, and deleted files by comparing hashes."""
-        raise NotImplementedError
+        current_hashes = {fp: _file_hash(content) for fp, content in current_files.items()}
+        return self.detect_changes_from_hashes(owner, name, current_hashes)
 
     def detect_changes_from_hashes(
         self,
@@ -417,29 +493,146 @@ class SQLiteIndexStore:
         current_hashes: dict[str, str],
     ) -> tuple[list[str], list[str], list[str]]:
         """Detect changes from precomputed hashes."""
-        raise NotImplementedError
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return [], list(current_hashes.keys()), []
+
+        conn = self._connect(db_path)
+        try:
+            rows = conn.execute("SELECT path, hash FROM files").fetchall()
+        finally:
+            conn.close()
+
+        old_hashes = {r["path"]: r["hash"] for r in rows if r["hash"]}
+
+        old_set = set(old_hashes.keys())
+        new_set = set(current_hashes.keys())
+
+        new_files = list(new_set - old_set)
+        deleted_files = list(old_set - new_set)
+        changed_files = [
+            fp for fp in (old_set & new_set)
+            if old_hashes[fp] != current_hashes[fp]
+        ]
+
+        return changed_files, new_files, deleted_files
 
     def list_repos(self) -> list[dict]:
-        """List all indexed repositories (scans .db and .json files)."""
-        raise NotImplementedError
+        """List all indexed repositories (scans .db files only)."""
+        repos = []
+        for db_file in self.base_path.glob("*.db"):
+            try:
+                entry = self._list_repo_from_db(db_file)
+                if entry:
+                    repos.append(entry)
+            except Exception:
+                logger.debug("Skipping corrupted DB: %s", db_file, exc_info=True)
+        repos.sort(key=lambda repo: repo["repo"])
+        return repos
+
+    def _list_repo_from_db(self, db_path: Path) -> Optional[dict]:
+        """Read repo metadata from a .db file for list_repos."""
+        try:
+            conn = self._connect(db_path)
+            meta = self._read_meta(conn)
+            symbol_count = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            conn.close()
+            if not meta:
+                return None
+            languages = json.loads(meta.get("languages", "{}"))
+            return {
+                "repo": meta.get("repo", ""),
+                "indexed_at": meta.get("indexed_at", ""),
+                "symbol_count": symbol_count,
+                "file_count": file_count,
+                "languages": languages,
+                "index_version": int(meta.get("index_version", "0")),
+                "git_head": meta.get("git_head", ""),
+                "display_name": meta.get("display_name", ""),
+                "source_root": meta.get("source_root", ""),
+            }
+        except Exception:
+            return None
 
     def delete_index(self, owner: str, name: str) -> bool:
         """Delete a repo's .db, .db-wal, .db-shm, and content dir."""
-        raise NotImplementedError
+        db_path = self._db_path(owner, name)
+        deleted = False
+
+        if db_path.exists():
+            db_path.unlink()
+            deleted = True
+
+        wal_path = Path(str(db_path) + "-wal")
+        if wal_path.exists():
+            wal_path.unlink()
+            deleted = True
+
+        shm_path = Path(str(db_path) + "-shm")
+        if shm_path.exists():
+            shm_path.unlink()
+            deleted = True
+
+        content_dir = self._content_dir(owner, name)
+        if content_dir.exists():
+            shutil.rmtree(content_dir)
+            deleted = True
+
+        return deleted
 
     def get_symbol_content(
         self, owner: str, name: str, symbol_id: str,
         _index: Optional[CodeIndex] = None,
     ) -> Optional[str]:
         """Read symbol source using stored byte offsets from content cache."""
-        raise NotImplementedError
+        if _index is not None:
+            sym_dict = _index.get_symbol(symbol_id)
+            if sym_dict is None:
+                return None
+        else:
+            sym_dict = self.get_symbol_by_id(owner, name, symbol_id)
+            if sym_dict is None:
+                return None
+
+        file_path = self._safe_content_path(self._content_dir(owner, name), sym_dict["file"])
+        if not file_path or not file_path.exists():
+            return None
+
+        with open(file_path, "rb") as f:
+            f.seek(sym_dict["byte_offset"])
+            source_bytes = f.read(sym_dict["byte_length"])
+
+        return source_bytes.decode("utf-8", errors="replace")
 
     def get_file_content(
         self, owner: str, name: str, file_path: str,
         _index: Optional[CodeIndex] = None,
     ) -> Optional[str]:
         """Read a cached file's full content."""
-        raise NotImplementedError
+        if _index is not None:
+            if not _index.has_source_file(file_path):
+                return None
+        else:
+            if not self.has_file(owner, name, file_path):
+                return None
+
+        content_path = self._safe_content_path(self._content_dir(owner, name), file_path)
+        if not content_path or not content_path.exists():
+            return None
+
+        return self._read_cached_text(content_path)
+
+    def checkpoint_and_close(self, owner: str, name: str) -> None:
+        """Compact WAL file on graceful shutdown. Call from server shutdown hook."""
+        db_path = self._db_path(owner, name)
+        if not db_path.exists():
+            return
+        conn = self._connect(db_path)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
 
     # ── Content cache helpers (reused from IndexStore) ──────────────
 
