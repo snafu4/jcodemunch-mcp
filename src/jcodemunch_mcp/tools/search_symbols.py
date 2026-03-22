@@ -36,36 +36,55 @@ def _tokenize(text: str) -> list[str]:
 
 def _sym_tokens(sym: dict) -> list[str]:
     """Weighted token bag for a symbol (repetition = field weight).
-    Cached on the symbol dict to avoid re-tokenizing across calls."""
+    Cached on the symbol dict to avoid re-tokenizing across calls.
+    Also caches _tf (term frequency dict) and _dl (document length)."""
     cached = sym.get("_tokens")
-    if cached is not None:
+    # Fast path: tokens AND tf/dl all present — nothing to do
+    if cached is not None and "_tf" in sym:
         return cached
-    tokens: list[str] = []
-    tokens += _tokenize(sym.get("name", "")) * _FIELD_REPS["name"]
-    tokens += [kw.lower() for kw in sym.get("keywords", [])] * _FIELD_REPS["keywords"]
-    tokens += _tokenize(sym.get("signature", "")) * _FIELD_REPS["signature"]
-    tokens += _tokenize(sym.get("summary", "")) * _FIELD_REPS["summary"]
-    tokens += _tokenize(sym.get("docstring", "")) * _FIELD_REPS["docstring"]
-    # NB: _tokens is internal; all API-facing code must use explicit key picks, not raw dict passthrough
-    sym["_tokens"] = tokens
+    # Build tokens if not yet cached (or reuse if carried forward without _tf/_dl)
+    if cached is not None:
+        tokens = cached
+    else:
+        tokens = []
+        tokens += _tokenize(sym.get("name", "")) * _FIELD_REPS["name"]
+        tokens += [kw.lower() for kw in sym.get("keywords", [])] * _FIELD_REPS["keywords"]
+        tokens += _tokenize(sym.get("signature", "")) * _FIELD_REPS["signature"]
+        tokens += _tokenize(sym.get("summary", "")) * _FIELD_REPS["summary"]
+        tokens += _tokenize(sym.get("docstring", "")) * _FIELD_REPS["docstring"]
+        sym["_tokens"] = tokens
+    # Always (re)compute tf/dl — cheap dict ops, ensures consistency
+    # NB: _tokens/_tf/_dl are internal; all API-facing code must use explicit
+    # key picks, not raw dict passthrough
+    tf: dict[str, int] = {}
+    for t in tokens:
+        tf[t] = tf.get(t, 0) + 1
+    sym["_tf"] = tf
+    sym["_dl"] = len(tokens)
     return tokens
 
 
-def _compute_bm25(symbols: list[dict]) -> tuple[dict[str, float], float]:
-    """Return (idf_map, avgdl) computed over all symbols in the index."""
+def _compute_bm25(symbols: list[dict]) -> tuple[dict[str, float], float, dict[str, list[int]]]:
+    """Return (idf_map, avgdl, inverted_index) computed over all symbols.
+
+    The inverted_index maps each term to the list of symbol indices that
+    contain it, enabling candidate-set narrowing at query time.
+    """
     N = len(symbols)
     if N == 0:
-        return {}, 0.0
+        return {}, 0.0, {}
     df: dict[str, int] = {}
     total_dl = 0
-    for sym in symbols:
+    inverted: dict[str, list[int]] = {}
+    for i, sym in enumerate(symbols):
         toks = _sym_tokens(sym)
         total_dl += len(toks)
         for t in set(toks):
             df[t] = df.get(t, 0) + 1
+            inverted.setdefault(t, []).append(i)
     avgdl = total_dl / N
     idf = {t: math.log((N - d + 0.5) / (d + 0.5) + 1.0) for t, d in df.items()}
-    return idf, avgdl
+    return idf, avgdl, inverted
 
 
 def _compute_centrality(symbols: list[dict], imports: Optional[dict]) -> dict[str, float]:
@@ -84,12 +103,14 @@ def _compute_centrality(symbols: list[dict], imports: Optional[dict]) -> dict[st
 
 def _bm25_score(sym: dict, query_terms: list[str], idf: dict[str, float], avgdl: float,
                 centrality: Optional[dict] = None) -> float:
-    """BM25 score for a single symbol."""
-    tokens = _sym_tokens(sym)
-    dl = len(tokens)
-    tf_raw: dict[str, int] = {}
-    for t in tokens:
-        tf_raw[t] = tf_raw.get(t, 0) + 1
+    """BM25 score for a single symbol.
+
+    Uses pre-cached _tf and _dl from _sym_tokens() to avoid rebuilding
+    the term frequency dict on every call.
+    """
+    _sym_tokens(sym)  # ensure _tf/_dl are populated
+    tf_raw = sym["_tf"]
+    dl = sym["_dl"]
 
     # Exact name match bonus so direct lookups still float to the top
     name_lower = sym.get("name", "").lower()
@@ -192,26 +213,41 @@ def search_symbols(
     query_terms = _tokenize(query) or [query.lower()]
     cache = index._bm25_cache
     if "idf" not in cache:
-        cache["idf"], cache["avgdl"] = _compute_bm25(index.symbols)
+        cache["idf"], cache["avgdl"], cache["inverted"] = _compute_bm25(index.symbols)
         cache["centrality"] = _compute_centrality(index.symbols, index.imports)
     idf = cache["idf"]
     avgdl = cache["avgdl"]
     centrality = cache["centrality"]
+    inverted = cache["inverted"]
 
-    # Single-pass BM25 scoring directly over index.symbols
-    # (replaces the two-pass heuristic pre-filter + BM25 re-rank)
+    # Narrow candidates using inverted index: only score symbols that
+    # contain at least one query term (union of posting lists).
+    # Falls back to full scan when filters (kind/file_pattern/language)
+    # are applied, since the inverted index doesn't track those.
+    use_inverted = not kind and not file_pattern and not language
+    if use_inverted:
+        candidate_indices: set[int] = set()
+        for term in query_terms:
+            posting = inverted.get(term)
+            if posting:
+                candidate_indices.update(posting)
+        candidates = [index.symbols[i] for i in sorted(candidate_indices)]
+    else:
+        candidates = index.symbols
+
     effective_limit = max_results if token_budget is None else len(index.symbols)
     heap: list[tuple[float, int, dict]] = []  # (score, candidates_scored, entry)
     candidates_scored = 0
 
-    for sym in index.symbols:
-        # Apply kind/file_pattern/language filters
-        if kind and sym.get("kind") != kind:
-            continue
-        if file_pattern and not fnmatch(sym.get("file", ""), file_pattern):
-            continue
-        if language and sym.get("language") != language:
-            continue
+    for sym in candidates:
+        # Apply kind/file_pattern/language filters (skipped when using inverted index)
+        if not use_inverted:
+            if kind and sym.get("kind") != kind:
+                continue
+            if file_pattern and not fnmatch(sym.get("file", ""), file_pattern):
+                continue
+            if language and sym.get("language") != language:
+                continue
 
         score = _bm25_score(sym, query_terms, idf, avgdl, centrality)
         if score <= 0:

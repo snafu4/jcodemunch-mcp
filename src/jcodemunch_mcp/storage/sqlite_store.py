@@ -663,16 +663,21 @@ class SQLiteIndexStore:
                 tokens = sym.get("_tokens")
                 ch = sym.get("content_hash")
                 if tokens is not None and ch:
-                    old_sym_map[sym["id"]] = (ch, tokens)
+                    old_sym_map[sym["id"]] = (ch, sym)
             if old_sym_map:
                 for sym in index.symbols:
                     old = old_sym_map.get(sym["id"])
                     if old is None:
                         continue
-                    old_hash, old_tokens = old
+                    old_hash, old_sym = old
                     new_hash = sym.get("content_hash")
                     if new_hash and new_hash == old_hash:
-                        sym["_tokens"] = old_tokens
+                        sym["_tokens"] = old_sym["_tokens"]
+                        # Also carry forward pre-computed TF and dl if present
+                        if "_tf" in old_sym:
+                            sym["_tf"] = old_sym["_tf"]
+                        if "_dl" in old_sym:
+                            sym["_dl"] = old_sym["_dl"]
 
         # Pre-warm cache so the next load_index() is instant
         _cache_put(owner, safe_name, db_path.stat().st_mtime_ns, index)
