@@ -138,10 +138,17 @@ def _bm25_score(sym: dict, query_terms: list[str], idf: dict[str, float], avgdl:
 
 
 def _bm25_breakdown(sym: dict, query_terms: list[str], idf: dict[str, float], avgdl: float) -> dict:
-    """Per-field BM25 contribution breakdown (for debug mode)."""
-    out: dict[str, float] = {}
-    K = _BM25_K1 * (1 - _BM25_B + _BM25_B * len(_sym_tokens(sym)) / max(avgdl, 1.0))
+    """Per-field BM25 contribution breakdown (for debug mode).
 
+    Uses cached _dl from _sym_tokens() for K computation but re-tokenizes
+    per field to attribute score contributions individually.
+    """
+    _sym_tokens(sym)  # ensure _dl is populated
+    dl = sym["_dl"]
+    K = _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / max(avgdl, 1.0))
+
+    query_set = set(query_terms)
+    # Per-field tokenization is unavoidable here — we need per-field attribution
     fields = {
         "name": _tokenize(sym.get("name", "")) * _FIELD_REPS["name"],
         "keywords": [kw.lower() for kw in sym.get("keywords", [])] * _FIELD_REPS["keywords"],
@@ -149,12 +156,13 @@ def _bm25_breakdown(sym: dict, query_terms: list[str], idf: dict[str, float], av
         "summary": _tokenize(sym.get("summary", "")) * _FIELD_REPS["summary"],
         "docstring": _tokenize(sym.get("docstring", "")) * _FIELD_REPS["docstring"],
     }
+    out: dict[str, float] = {}
     for fname, ftoks in fields.items():
         tf_raw: dict[str, int] = {}
         for t in ftoks:
             tf_raw[t] = tf_raw.get(t, 0) + 1
         field_score = 0.0
-        for term in set(query_terms):
+        for term in query_set:
             tf = tf_raw.get(term, 0)
             if tf > 0 and idf.get(term, 0.0) > 0:
                 field_score += idf[term] * (tf * (_BM25_K1 + 1)) / (tf + K)
@@ -311,7 +319,7 @@ def search_symbols(
     # Full detail: inline source, docstring, end_line for each result
     if detail_level == "full":
         for entry in scored_results:
-            sym = index.get_symbol(entry["id"])
+            sym = index._get_symbol_raw(entry["id"])
             if sym:
                 source = store.get_symbol_content(owner, name, entry["id"], _index=index)
                 entry["end_line"] = sym.get("end_line", entry["line"])
