@@ -747,7 +747,39 @@ async def list_tools() -> list[Tool]:
     if disabled:
         tools = [t for t in tools if t.name not in disabled]
 
+    # Merge descriptions from config (runs after disabled_tools filter)
+    _apply_description_overrides(tools)
+
     return tools
+
+
+def _apply_description_overrides(tools: list) -> None:
+    """Apply description overrides from config to tool schemas."""
+    descriptions = config_module.get_descriptions()
+    if not descriptions:
+        return
+
+    shared = descriptions.get("_shared", {})
+
+    for tool in tools:
+        tool_desc = descriptions.get(tool.name)
+        if not tool_desc:
+            continue
+
+        # Override tool-level description
+        if "_tool" in tool_desc and tool_desc["_tool"]:
+            tool.description = tool_desc["_tool"]
+
+        # Override parameter descriptions
+        if isinstance(tool.inputSchema, dict):
+            props = tool.inputSchema.get("properties", {})
+            for param_name, param_schema in props.items():
+                if not isinstance(param_schema, dict):
+                    continue
+                # Tool-specific override takes precedence over _shared
+                desc_override = tool_desc.get(param_name) or shared.get(param_name)
+                if desc_override:
+                    props[param_name] = {**param_schema, "description": desc_override}
 
 
 @server.list_resources()

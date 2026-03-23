@@ -384,7 +384,62 @@ async def test_call_tool_uses_our_schema_cache_not_sdk():
 
 
 @pytest.mark.asyncio
-async def test_meta_fields_empty_removes_meta_envelope():
+async def test_descriptions_config_overrides_tool_descriptions(monkeypatch):
+    """Config descriptions should override tool descriptions."""
+    from jcodemunch_mcp import config as config_module
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["descriptions"] = {
+            "search_symbols": {
+                "_tool": "Custom search_symbols description",
+                "repo": "Custom repo description"
+            },
+            "_shared": {
+                "repo": "Shared custom repo desc"
+            }
+        }
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        search_symbols = next((t for t in tools if t.name == "search_symbols"), None)
+        assert search_symbols is not None
+        assert search_symbols.description == "Custom search_symbols description"
+
+        # Param description should also be overridden
+        repo_param = search_symbols.inputSchema.get("properties", {}).get("repo", {})
+        assert repo_param.get("description") == "Custom repo description"
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+@pytest.mark.asyncio
+async def test_no_descriptions_config_keeps_original(monkeypatch):
+    """When descriptions config is absent, original tool descriptions are used."""
+    from jcodemunch_mcp import config as config_module
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["descriptions"] = {}
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        search_symbols = next((t for t in tools if t.name == "search_symbols"), None)
+        assert search_symbols is not None
+
+        # Should keep original description (starts with "Search for")
+        assert search_symbols.description.startswith("Search for")
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+
     """meta_fields=[] strips the _meta key from the response."""
     from jcodemunch_mcp import config as config_module
 
