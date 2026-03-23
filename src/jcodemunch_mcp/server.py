@@ -41,13 +41,25 @@ from .tools.suggest_queries import suggest_queries
 from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
 from .parser.symbols import VALID_KINDS
-
+from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
 
 try:
     from .watcher import watch_folders, WatcherError
 except ImportError:
     watch_folders = None  # type: ignore[assignment, misc]
     WatcherError = type("WatcherError", (Exception,), {})  # type: ignore[assignment, misc]
+
+
+# Tools excluded from strict freshness mode (don't wait for reindex)
+_EXCLUDED_FROM_STRICT = frozenset({
+    "list_repos",
+    "get_session_stats",
+    "wait_for_fresh",
+    "index_repo",
+    "index_folder",
+    "index_file",
+    "invalidate_cache",
+})
 
 
 logger = logging.getLogger(__name__)
@@ -700,6 +712,25 @@ async def list_tools() -> list[Tool]:
                 "required": ["repo", "symbol"]
             }
         ),
+        Tool(
+            name="wait_for_fresh",
+            description="Wait for a repo's in-progress watcher reindex to finish, then return the fresh result. In strict freshness mode, blocks up to timeout_ms. In relaxed mode (default), returns immediately.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Maximum time to wait in milliseconds (default 500)",
+                        "default": 500
+                    }
+                },
+                "required": ["repo"]
+            }
+        ),
     ]
 
 
@@ -732,6 +763,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text=json.dumps(
                     {"error": f"Input validation error: {e.message}"}, indent=2
                 ))]
+
+        # Strict freshness mode: wait for any in-progress reindex to complete
+        # before serving query results (except for write/index tools).
+        # MUST use asyncio.to_thread — threading.Event.wait() cannot run on the event loop.
+        repo_arg = arguments.get("repo")
+        if (name not in _EXCLUDED_FROM_STRICT and repo_arg):
+            await asyncio.to_thread(await_freshness_if_strict, repo_arg, timeout_ms=500)
+
         if name == "index_repo":
             result = await index_repo(
                 url=arguments["url"],
@@ -989,11 +1028,31 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     storage_path=storage_path,
                 )
             )
+        elif name == "wait_for_fresh":
+            result = await asyncio.to_thread(
+                wait_for_fresh_result,
+                repo=arguments["repo"],
+                timeout_ms=arguments.get("timeout_ms", 500),
+            )
         else:
             result = {"error": f"Unknown tool: {name}"}
         
         if isinstance(result, dict):
-            result.setdefault("_meta", {})["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
+            _meta = result.setdefault("_meta", {})
+            _meta["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
+            # Inject staleness fields for per-repo tools
+            repo_arg = arguments.get("repo")
+            if repo_arg:
+                # get_reindex_status returns spec fields: index_stale, reindex_in_progress,
+                # stale_since_ms, and conditionally reindex_error / reindex_failures.
+                _meta.update(get_reindex_status(repo_arg))
+            elif name not in ("list_repos", "get_session_stats", "index_repo", "index_folder"):
+                # For non-repo tools, report global reindex activity
+                from .reindex_state import is_any_reindex_in_progress
+                any_in_progress = is_any_reindex_in_progress()
+                _meta["index_stale"] = any_in_progress
+                _meta["reindex_in_progress"] = any_in_progress
+                _meta["stale_since_ms"] = None
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     except KeyError as e:
@@ -1588,6 +1647,12 @@ def main(argv: Optional[list[str]] = None):
         help="Log watcher output to file instead of stderr. "
              "Use --watcher-log for auto temp file, or --watcher-log=<path> for a specific file.",
     )
+    serve_parser.add_argument(
+        "--freshness-mode",
+        default=os.environ.get("JCODEMUNCH_FRESHNESS_MODE", "relaxed"),
+        choices=["relaxed", "strict"],
+        help="Freshness mode: 'relaxed' (default) or 'strict' (block queries until watcher reindex finishes)",
+    )
 
     # --- watch ---
     watch_parser = subparsers.add_parser(
@@ -1747,6 +1812,8 @@ def main(argv: Optional[list[str]] = None):
         )
     else:
         # serve (default)
+        from .reindex_state import set_freshness_mode
+        set_freshness_mode(args.freshness_mode)
         watcher_enabled = _get_watcher_enabled(args)
 
         if watcher_enabled:

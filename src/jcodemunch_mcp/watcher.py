@@ -18,6 +18,14 @@ from typing import Callable, IO, Optional
 from .hook_event import DEFAULT_MANIFEST_PATH, read_manifest
 from .tools.index_folder import index_folder
 from .tools.invalidate_cache import invalidate_cache
+from .reindex_state import (
+    WatcherChange,
+    mark_reindex_start,
+    mark_reindex_done,
+    mark_reindex_failed,
+)
+from .storage import IndexStore
+from .storage.index_store import _file_hash
 
 logger = logging.getLogger(__name__)
 
@@ -258,25 +266,61 @@ async def _watch_single(
     """Watch a single folder and re-index on changes."""
     _watcher_output(f"Watching {folder_path} (debounce={debounce_ms}ms)", quiet=quiet, log_file_handle=log_file_handle)
 
+    # Compute repo identifier for memory hash cache and reindex state.
+    # _local_repo_id returns "local/name-hash" — the full identifier for reindex_state.
+    # IndexStore.load_index(owner, name) requires the split components.
+    repo_id = _local_repo_id(folder_path)
+    _repo_owner, _repo_store_name = repo_id.split("/", 1)
+    store = IndexStore(base_path=storage_path)
+
+    # Memory hash cache: rel_path -> content hash (for WatcherChange old_hash passthrough)
+    _hash_cache: dict[str, str] = {}
+
+    def _build_hash_cache() -> None:
+        """Build the memory hash cache from the on-disk index."""
+        _hash_cache.clear()
+        idx = store.load_index(_repo_owner, _repo_store_name)
+        if idx and idx.file_hashes:
+            _hash_cache.update(idx.file_hashes)
+
+    def _update_hash_cache(abs_path: str, new_hash: str) -> None:
+        """Update the memory hash cache after a successful reindex."""
+        rel_path = Path(abs_path).relative_to(folder_path).as_posix()
+        _hash_cache[rel_path] = new_hash
+
+    def _remove_from_hash_cache(abs_path: str) -> None:
+        """Remove an entry from the memory hash cache on deletion."""
+        rel_path = Path(abs_path).relative_to(folder_path).as_posix()
+        _hash_cache.pop(rel_path, None)
+
     # Do an initial incremental index to ensure the index is current
     _watcher_output(f"  Initial index for {folder_path}...", quiet=quiet, log_file_handle=log_file_handle)
-    result = await asyncio.to_thread(
-        index_folder,
-        path=folder_path,
-        use_ai_summaries=use_ai_summaries,
-        storage_path=storage_path,
-        extra_ignore_patterns=extra_ignore_patterns,
-        follow_symlinks=follow_symlinks,
-        incremental=True,
-    )
-    if result.get("success"):
-        msg = result.get("message", f"{result.get('symbol_count', '?')} symbols")
-        _watcher_output(f"  Indexed {folder_path}: {msg} ({result.get('duration_seconds', '?')}s)", quiet=quiet, log_file_handle=log_file_handle)
-        # Count initial index as activity (only if it actually did work)
-        if on_reindex is not None and result.get("message") != "No changes detected":
-            on_reindex()
-    else:
-        _watcher_output(f"  WARNING: initial index failed for {folder_path}: {result.get('error')}", quiet=quiet, log_file_handle=log_file_handle)
+    mark_reindex_start(repo_id)
+    try:
+        result = await asyncio.to_thread(
+            index_folder,
+            path=folder_path,
+            use_ai_summaries=use_ai_summaries,
+            storage_path=storage_path,
+            extra_ignore_patterns=extra_ignore_patterns,
+            follow_symlinks=follow_symlinks,
+            incremental=True,
+        )
+        if result.get("success"):
+            msg = result.get("message", f"{result.get('symbol_count', '?')} symbols")
+            _watcher_output(f"  Indexed {folder_path}: {msg} ({result.get('duration_seconds', '?')}s)", quiet=quiet, log_file_handle=log_file_handle)
+            # Build hash cache from the index we just created/updated
+            _build_hash_cache()
+            mark_reindex_done(repo_id, result)
+            # Count initial index as activity (only if it actually did work)
+            if on_reindex is not None and result.get("message") != "No changes detected":
+                on_reindex()
+        else:
+            _watcher_output(f"  WARNING: initial index failed for {folder_path}: {result.get('error')}", quiet=quiet, log_file_handle=log_file_handle)
+            mark_reindex_failed(repo_id, result.get("error", "unknown error"))
+    except Exception as exc:
+        mark_reindex_failed(repo_id, str(exc))
+        raise
 
     try:
         from watchfiles import awatch, Change
@@ -316,12 +360,32 @@ async def _watch_single(
         )
 
         try:
-            # Map watchfiles Change enum to string labels for index_folder
+            # Map watchfiles Change enum to WatcherChange objects with old_hash from memory cache
             _change_map = {Change.added: "added", Change.modified: "modified", Change.deleted: "deleted"}
-            watcher_changes = [
-                (_change_map[ct], p) for ct, p in relevant
-            ]
+            watcher_changes: list[WatcherChange] = []
+            for ct, p in relevant:
+                change_type_str = _change_map[ct]
+                if ct == Change.deleted:
+                    # For deletions, old_hash comes from our memory cache
+                    old_hash = _hash_cache.get(Path(p).relative_to(folder_path).as_posix(), "")
+                elif ct == Change.modified:
+                    # For modifications, read the current file hash BEFORE the watcher detects the change
+                    # Use memory cache as hint; if not available, compute from file
+                    cached_rel = Path(p).relative_to(folder_path).as_posix()
+                    old_hash = _hash_cache.get(cached_rel, "")
+                    if not old_hash:
+                        # Fall back: read file to get old hash (should be rare)
+                        try:
+                            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                                old_hash = _file_hash(f.read())
+                        except Exception:
+                            old_hash = ""
+                else:
+                    # For additions, no old hash
+                    old_hash = ""
+                watcher_changes.append(WatcherChange(change_type_str, p, old_hash))
 
+            mark_reindex_start(repo_id)
             result = await asyncio.to_thread(
                 index_folder,
                 path=folder_path,
@@ -336,6 +400,7 @@ async def _watch_single(
                 duration = result.get("duration_seconds", "?")
                 if result.get("message") == "No changes detected":
                     _watcher_output(f"  Re-indexed {folder_path}: no indexable changes ({duration}s)", quiet=quiet, log_file_handle=log_file_handle)
+                    mark_reindex_done(repo_id, result)
                 else:
                     changed = result.get("changed", 0)
                     new = result.get("new", 0)
@@ -345,6 +410,20 @@ async def _watch_single(
                         f"changed={changed} new={new} deleted={deleted} ({duration}s)",
                         quiet=quiet, log_file_handle=log_file_handle,
                     )
+                    mark_reindex_done(repo_id, result)
+                    # Update hash cache with new hashes for changed/new files
+                    if watcher_changes:
+                        for wc in watcher_changes:
+                            if wc.change_type == "deleted":
+                                _remove_from_hash_cache(wc.path)
+                            elif wc.change_type in ("added", "modified"):
+                                # Re-read the new content hash after reindex
+                                try:
+                                    with open(wc.path, "r", encoding="utf-8", errors="replace") as f:
+                                        new_hash = _file_hash(f.read())
+                                    _update_hash_cache(wc.path, new_hash)
+                                except Exception:
+                                    pass
                     # Report re-index activity (only if it actually did work)
                     if on_reindex is not None:
                         on_reindex()
@@ -353,9 +432,11 @@ async def _watch_single(
                     f"  WARNING: re-index failed for {folder_path}: {result.get('error')}",
                     quiet=quiet, log_file_handle=log_file_handle,
                 )
+                mark_reindex_failed(repo_id, result.get("error", "unknown error"))
         except Exception as e:
             logger.exception("Re-index error for %s: %s", folder_path, e)
             _watcher_output(f"  ERROR: re-index failed for {folder_path}: {e}", quiet=quiet, log_file_handle=log_file_handle)
+            mark_reindex_failed(repo_id, str(e))
 
 
 async def watch_folders(

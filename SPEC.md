@@ -15,6 +15,8 @@
   * [Retrieval](#retrieval)
   * [Search](#search)
   * [Relationship and Impact Analysis](#relationship-and-impact-analysis)
+  * [Freshness and Backpressure](#freshness-and-backpressure)
+  * [Observability](#observability)
 * [Data Models](#data-models)
 
   * [Symbol](#symbol)
@@ -25,10 +27,12 @@
   * [Local Folders](#local-folders)
   * [Filtering Pipeline](#filtering-pipeline)
 * [Indexing Semantics](#indexing-semantics)
+* [Watcher and Index Freshness](#watcher-and-index-freshness)
 * [Search and Ranking Semantics](#search-and-ranking-semantics)
 * [Retrieval Semantics](#retrieval-semantics)
 * [Response Envelope](#response-envelope)
 * [Error Handling](#error-handling)
+* [Transport Modes and CLI](#transport-modes-and-cli)
 * [Environment Variables](#environment-variables)
 * [Security and Safety Controls](#security-and-safety-controls)
 * [Performance and Operational Notes](#performance-and-operational-notes)
@@ -384,6 +388,27 @@ Representative result shape:
 
 ---
 
+#### `search_columns` — Search column metadata across indexed models
+
+```json
+{
+  "repo": "owner/repo",
+  "query": "customer_id",
+  "model_pattern": "stg_*",
+  "max_results": 20
+}
+```
+
+Searches column metadata emitted by context providers (dbt, SQLMesh, database catalogs, etc.). Returns model name, file path, column name, and description.
+
+**Behavioral notes:**
+
+* only returns results when the index was built with an active provider that emits column data
+* `model_pattern` narrows results to matching model names
+* intended for data-engineering workflows and lineage exploration
+
+---
+
 ### Relationship and Impact Analysis
 
 #### `get_related_symbols` — Find structurally or heuristically related symbols
@@ -430,16 +455,131 @@ Estimates likely impact by traversing reverse import relationships and inspectin
 
 ---
 
-#### `get_symbol_diff` — Compare indexed symbol states across snapshots
+#### `find_importers` — Find files that import a given file
 
 ```json
 {
   "repo": "owner/repo",
-  "symbol_id": "src/core.py::process_order#function"
+  "file_path": "src/auth.py"
 }
 ```
 
-Reports added, removed, or changed symbols by comparing indexed snapshots using `(name, kind)` and `content_hash`.
+Answers "what uses this file?" by walking the stored import graph. Each result indicates whether the importer is itself imported by other files.
+
+**Behavioral notes:**
+
+* accepts `file_path` (single) or `file_paths` (batch)
+* returns `has_importers` boolean per result for quick fan-out assessment
+* useful for understanding coupling before refactoring
+
+---
+
+#### `find_references` — Find files that reference an identifier
+
+```json
+{
+  "repo": "owner/repo",
+  "identifier": "UserService"
+}
+```
+
+Answers "where is this used?" by combining import-graph analysis and identifier-name matching. For dbt, also traces `{{ ref() }}` and `{{ source() }}` edges.
+
+**Behavioral notes:**
+
+* accepts `identifier` (single) or `identifiers` (batch)
+* returns matches grouped by type: import references, content references, model references
+
+---
+
+#### `check_references` — Dead-code detection combining imports and content search
+
+```json
+{
+  "repo": "owner/repo",
+  "identifier": "deprecated_helper"
+}
+```
+
+Combines `find_references` and `search_text` into one call. Returns `is_referenced` boolean for quick dead-code checks plus detailed matches when references exist.
+
+**Behavioral notes:**
+
+* accepts `identifier` (single) or `identifiers` (batch)
+* `search_content` controls whether to include text-search fallback (default true)
+* intended as a single-call replacement for the common "is this symbol used anywhere?" pattern
+
+---
+
+#### `get_dependency_graph` — File-level dependency graph
+
+```json
+{
+  "repo": "owner/repo",
+  "file": "src/core.py",
+  "direction": "both",
+  "depth": 2
+}
+```
+
+Traverses import relationships to build a file-level dependency graph.
+
+**Behavioral notes:**
+
+* `direction`: `"imports"` (files this file depends on), `"importers"` (files that depend on this file), or `"both"`
+* `depth`: number of hops to traverse (1–3)
+* useful for understanding module coupling and change impact
+
+---
+
+#### `get_symbol_diff` — Compare indexed symbol states across snapshots
+
+```json
+{
+  "repo_a": "owner/repo-branch-a",
+  "repo_b": "owner/repo-branch-b"
+}
+```
+
+Reports added, removed, or changed symbols by comparing two indexed snapshots using `(name, kind)` and `content_hash`. Index the same repo under two names to compare branches.
+
+---
+
+### Freshness and Backpressure
+
+#### `wait_for_fresh` — Wait for watcher reindex to complete
+
+```json
+{
+  "repo": "local/project-abc123",
+  "timeout_ms": 500
+}
+```
+
+Blocks until the watcher's in-progress reindex completes for the specified repo, or until timeout.
+
+**Return shapes:**
+
+* Already fresh: `{"fresh": true, "waited_ms": 0}`
+* Waited and got fresh: `{"fresh": true, "waited_ms": 123}`
+* Timeout: `{"fresh": false, "waited_ms": 500, "reason": "timeout"}`
+* Persistent failure (2nd+ consecutive): `{"fresh": false, "waited_ms": 0, "reason": "reindex_failed", "reindex_error": "...", "reindex_failures": 3}`
+
+**Behavioral notes:**
+
+* intended for multi-agent workflows where an agent writes files and needs to read fresh symbols immediately
+* uses `threading.Event.wait()` internally — dispatched via `asyncio.to_thread` in `call_tool`
+* in strict freshness mode, all read query tools automatically wait before returning (this tool is not needed in that mode)
+
+---
+
+### Observability
+
+#### `get_session_stats` — Token savings statistics
+
+No input required.
+
+Returns per-session and all-time token savings statistics, per-tool breakdown, session duration, and cost-avoidance estimates across model price points.
 
 ---
 
@@ -589,13 +729,83 @@ The indexing process performs the following conceptual stages:
 
 Incremental indexing avoids reprocessing unchanged files by comparing stored file hashes and repository metadata.
 
-Enhancements may include:
+Key behaviors:
 
-* Git tree SHA short-circuiting for unchanged remote indexes
-* watch-triggered incremental runs
-* atomic writes
-* cross-process locking
-* integrity verification sidecars
+* **Mtime fast-path**: files whose mtime is unchanged since the last index are skipped without reading content
+* **Hash comparison**: files with changed mtimes are hashed; if the hash matches the stored value, parsing is skipped
+* **Watcher fast-path**: when the watcher provides a pre-known change set via `changed_paths`, full directory discovery is skipped entirely — only the affected files are processed
+* **Memory hash cache**: the watcher supplies `old_hash` from its in-memory cache, allowing `index_folder` to skip loading the stored index from SQLite
+* **Git tree SHA short-circuiting**: unchanged remote indexes can be detected via the tree SHA
+* **Cross-process locking**: file locks prevent concurrent index corruption
+* **Atomic writes**: index updates use atomic write patterns to prevent partial-write corruption
+
+---
+
+## Watcher and Index Freshness
+
+### Watcher architecture
+
+The file watcher monitors local folders for changes and triggers incremental reindexing automatically. It runs as a background task in the same event loop as the MCP server (when `--watcher` is enabled) or as a standalone process via the `watch` subcommand.
+
+**Key components:**
+
+* **Debounce**: filesystem events are debounced (default 2000ms, configurable via `JCODEMUNCH_WATCH_DEBOUNCE_MS`) before triggering a reindex
+* **Memory hash cache**: the watcher maintains an in-memory `dict[str, str]` mapping `rel_path → content_hash`. On each debounce tick, the watcher compares incoming file hashes against in-memory hashes rather than loading the full SQLite index (~57ms savings per reindex)
+* **WatcherChange**: changed files are communicated to `index_folder` as `WatcherChange(change_type, abs_path, old_hash)` NamedTuples, where `old_hash` is provided from the memory cache
+* **Fast path**: when `changed_paths` is provided, `index_folder` skips full directory discovery (~3s on Windows) and only processes affected files
+
+### Deferred summarization
+
+When AI summaries are enabled, the fast path splits the indexing pipeline into two phases:
+
+1. **Immediate** (critical path): tree-sitter parse → `incremental_save` with empty summaries
+2. **Deferred** (background daemon thread): AI summarization → second `incremental_save` to update summaries
+
+A monotonic generation counter prevents stale deferred work from overwriting fresher data: the deferred thread captures the current generation before starting and checks it again before saving.
+
+### Per-repo reindex state
+
+Each repo tracked by the watcher has independent reindex state:
+
+* `reindexing`: whether a reindex is actively in progress
+* `stale_since`: monotonic timestamp when the index first became stale
+* `consecutive_failures`: incremented on failure, reset on success
+* `deferred_generation`: monotonic counter for deferred-work cancellation
+
+State is managed through three lifecycle functions:
+
+* `mark_reindex_start(repo)` — sets reindexing flag, clears event, records stale_since
+* `mark_reindex_done(repo)` — clears reindexing, sets event, clears stale_since and failures
+* `mark_reindex_failed(repo, error)` — clears reindexing, sets event (unblocks waiters), increments failures, preserves stale_since
+
+### Staleness signaling via `_meta`
+
+Every query response includes staleness fields in `_meta`:
+
+```json
+{
+  "_meta": {
+    "index_stale": true,
+    "reindex_in_progress": true,
+    "stale_since_ms": 47
+  }
+}
+```
+
+* `index_stale`: true when the repo is actively reindexing or the previous reindex failed (stale_since is set)
+* `reindex_in_progress`: true only while actively reindexing
+* `stale_since_ms`: milliseconds since the index first became stale, or null
+
+**Failure escalation:** on the 1st consecutive failure, only `index_stale: true` is set (transient tolerance). On the 2nd+ consecutive failure, `reindex_error` and `reindex_failures` are added to `_meta`.
+
+### Freshness modes
+
+The server supports two freshness modes, controlled by `--freshness-mode` or `JCODEMUNCH_FRESHNESS_MODE`:
+
+* **`relaxed`** (default): query tools return immediately regardless of reindex state. Agents can inspect `_meta` staleness fields or call `wait_for_fresh` explicitly.
+* **`strict`**: all read query tools automatically wait up to 500ms for any in-progress reindex to complete before returning. Write tools (`index_folder`, `index_repo`, `index_file`, `invalidate_cache`) and utility tools (`list_repos`, `get_session_stats`, `wait_for_fresh`) are excluded from the wait.
+
+The strict-mode wait uses `threading.Event.wait()` dispatched via `asyncio.to_thread` to avoid blocking the event loop.
 
 ---
 
@@ -654,6 +864,7 @@ Representative envelope:
 ```json
 {
   "_meta": {
+    "powered_by": "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp",
     "timing_ms": 42,
     "repo": "owner/repo",
     "symbol_count": 387,
@@ -661,13 +872,17 @@ Representative envelope:
     "content_verified": true,
     "tokens_saved": 2450,
     "total_tokens_saved": 184320,
-    "estimate_method": "..."
+    "estimate_method": "...",
+    "index_stale": false,
+    "reindex_in_progress": false,
+    "stale_since_ms": null
   }
 }
 ```
 
 ### Common `_meta` fields
 
+* **`powered_by`**: attribution string, always present
 * **`timing_ms`**: elapsed execution time in milliseconds
 * **`repo`**: repository identifier
 * **`symbol_count`**: symbol count where relevant to the operation
@@ -676,6 +891,18 @@ Representative envelope:
 * **`tokens_saved`**: per-call token-savings estimate
 * **`total_tokens_saved`**: cumulative saved-token estimate across calls
 * **`estimate_method`**: label describing how the savings estimate was computed
+
+### Staleness `_meta` fields
+
+Present on all query responses when a watcher is active:
+
+* **`index_stale`**: whether the repo's index is stale (reindexing or failed)
+* **`reindex_in_progress`**: whether the repo is actively reindexing right now
+* **`stale_since_ms`**: milliseconds since the index first became stale, or null
+* **`reindex_error`**: error message (only on 2nd+ consecutive failure)
+* **`reindex_failures`**: failure count (only on 2nd+ consecutive failure)
+
+For tools without a `repo` parameter (except excluded tools like `list_repos` and `get_session_stats`), global staleness is reported: `index_stale` and `reindex_in_progress` reflect whether *any* repo is currently reindexing.
 
 The exact `_meta` shape may vary by tool, but the response contract emphasizes explicit operational metadata rather than opaque output.
 
@@ -714,27 +941,73 @@ The error model is designed so that partial failures during indexing do not nece
 
 ---
 
+## Transport Modes and CLI
+
+### Subcommands
+
+| Subcommand    | Purpose |
+| ------------- | ------- |
+| `serve`       | Run the MCP server (default when no subcommand given) |
+| `watch`       | Watch folders for changes and auto-reindex (standalone) |
+| `watch-claude`| Auto-discover and watch Claude Code worktrees |
+| `hook-event`  | Record a worktree lifecycle event (used by hooks) |
+
+### Transport modes (`serve`)
+
+The `serve` subcommand supports three transport modes via `--transport` or `JCODEMUNCH_TRANSPORT`:
+
+* **`stdio`** (default): standard input/output, suitable for MCP clients that launch the server as a subprocess
+* **`sse`**: HTTP with Server-Sent Events, for persistent connections
+* **`streamable-http`**: HTTP with streamable response bodies
+
+HTTP transports bind to `--host` / `--port` (defaults: `127.0.0.1:8901`) and support optional bearer token authentication via `JCODEMUNCH_HTTP_TOKEN`.
+
+### Serve flags
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--transport {stdio,sse,streamable-http}` | Transport mode |
+| `--host HOST` | HTTP bind address |
+| `--port PORT` | HTTP listen port |
+| `--watcher[=BOOL]` | Enable background file watcher |
+| `--watcher-path PATH [PATH...]` | Folders to watch (default: cwd) |
+| `--watcher-debounce MS` | Debounce interval in ms |
+| `--watcher-idle-timeout MINUTES` | Auto-stop after N idle minutes |
+| `--watcher-no-ai-summaries` | Disable AI summaries for watcher |
+| `--watcher-log [PATH]` | Log watcher output to file |
+| `--freshness-mode {relaxed,strict}` | Freshness mode for query tools |
+
+---
+
 ## Environment Variables
 
-| Variable                        | Purpose                                                              | Required |
-| ------------------------------- | -------------------------------------------------------------------- | -------- |
-| `GITHUB_TOKEN`                  | GitHub API authentication, higher limits, private repository support | No       |
-| `ANTHROPIC_API_KEY`             | enables Anthropic-based summaries                                    | No       |
-| `ANTHROPIC_MODEL`               | overrides the Anthropic summary model                                | No       |
-| `GOOGLE_API_KEY`                | enables Gemini-based summaries when Anthropic is not configured      | No       |
-| `GOOGLE_MODEL`                  | overrides the Gemini summary model                                   | No       |
-| `OPENAI_API_BASE`               | enables local or remote OpenAI-compatible summary backends           | No       |
-| `OPENAI_MODEL`                  | model name for OpenAI-compatible summary backends                    | No       |
-| `OPENAI_API_KEY`                | authentication for OpenAI-compatible summary backends                | No       |
-| `OPENAI_CONCURRENCY`            | concurrency control for summary batching                             | No       |
-| `OPENAI_BATCH_SIZE`             | batch sizing for OpenAI-compatible summarization                     | No       |
-| `OPENAI_MAX_TOKENS`             | max output tokens for compatible summarizers                         | No       |
-| `CODE_INDEX_PATH`               | custom storage path                                                  | No       |
-| `JCODEMUNCH_CONTEXT_PROVIDERS`  | enables or disables provider enrichment                              | No       |
-| `JCODEMUNCH_MAX_INDEX_FILES`    | overrides the default file-count limit                               | No       |
-| `JCODEMUNCH_LOG_FILE`           | directs logging to file instead of stderr in stdio sessions          | No       |
-| `JCODEMUNCH_SHARE_SAVINGS`      | enables or disables community savings reporting                      | No       |
-| `JCODEMUNCH_REDACT_SOURCE_ROOT` | redacts absolute path details from output                            | No       |
+| Variable                          | Purpose                                                              | Required |
+| --------------------------------- | -------------------------------------------------------------------- | -------- |
+| `GITHUB_TOKEN`                    | GitHub API authentication, higher limits, private repository support | No       |
+| `ANTHROPIC_API_KEY`               | enables Anthropic-based summaries                                    | No       |
+| `ANTHROPIC_MODEL`                 | overrides the Anthropic summary model                                | No       |
+| `GOOGLE_API_KEY`                  | enables Gemini-based summaries when Anthropic is not configured      | No       |
+| `GOOGLE_MODEL`                    | overrides the Gemini summary model                                   | No       |
+| `OPENAI_API_BASE`                 | enables local or remote OpenAI-compatible summary backends           | No       |
+| `OPENAI_MODEL`                    | model name for OpenAI-compatible summary backends                    | No       |
+| `OPENAI_API_KEY`                  | authentication for OpenAI-compatible summary backends                | No       |
+| `OPENAI_CONCURRENCY`              | concurrency control for summary batching                             | No       |
+| `OPENAI_BATCH_SIZE`               | batch sizing for OpenAI-compatible summarization                     | No       |
+| `OPENAI_MAX_TOKENS`               | max output tokens for compatible summarizers                         | No       |
+| `CODE_INDEX_PATH`                 | custom storage path                                                  | No       |
+| `JCODEMUNCH_CONTEXT_PROVIDERS`    | enables or disables provider enrichment                              | No       |
+| `JCODEMUNCH_MAX_INDEX_FILES`      | overrides the default file-count limit                               | No       |
+| `JCODEMUNCH_LOG_FILE`             | directs logging to file instead of stderr in stdio sessions          | No       |
+| `JCODEMUNCH_SHARE_SAVINGS`        | enables or disables community savings reporting                      | No       |
+| `JCODEMUNCH_REDACT_SOURCE_ROOT`   | redacts absolute path details from output                            | No       |
+| `JCODEMUNCH_TRANSPORT`            | transport mode: `stdio`, `sse`, or `streamable-http`                | No       |
+| `JCODEMUNCH_HOST`                 | HTTP bind address (default `127.0.0.1`)                             | No       |
+| `JCODEMUNCH_PORT`                 | HTTP listen port (default `8901`)                                   | No       |
+| `JCODEMUNCH_HTTP_TOKEN`           | bearer token for HTTP transport authentication                      | No       |
+| `JCODEMUNCH_FRESHNESS_MODE`       | freshness mode: `relaxed` (default) or `strict`                     | No       |
+| `JCODEMUNCH_WATCH_DEBOUNCE_MS`    | watcher debounce interval in ms (default `2000`)                    | No       |
+| `JCODEMUNCH_USE_AI_SUMMARIES`     | default for `use_ai_summaries` flag (`true`/`false`)                | No       |
+| `JCODEMUNCH_CLAUDE_POLL_INTERVAL` | poll interval in seconds for `watch-claude` git polling             | No       |
 
 ---
 
@@ -751,7 +1024,7 @@ The specification assumes the following security controls are part of compliant 
 * SSRF prevention for configurable API base URLs
 * ReDoS protection in text search
 * safe temporary-file behavior
-* optional HTTP bearer authentication for HTTP transport
+* optional HTTP bearer authentication for HTTP transport (via `JCODEMUNCH_HTTP_TOKEN`)
 * source-root redaction when configured
 
 These protections apply to repository discovery, file loading, search, retrieval, and optional external-summary integrations.
@@ -778,7 +1051,14 @@ Cross-process locking is used to reduce the risk of index corruption under concu
 
 ### Watch mode
 
-A watch-oriented interface may monitor directories and trigger incremental reindexing automatically.
+The file watcher monitors directories and triggers incremental reindexing automatically. It can run embedded in the `serve` process (via `--watcher`) or standalone (via the `watch` subcommand).
+
+Key optimizations:
+
+* **Memory hash cache**: avoids loading the full SQLite index on each debounce tick (~57ms savings)
+* **Watcher fast path**: when the watcher knows the exact changed files, `index_folder` skips full directory discovery (~3s → ~50ms on Windows)
+* **Deferred summarization**: AI summaries are computed in a background thread, so the index is available immediately with empty summaries that are filled in asynchronously
+* **Per-repo backpressure**: each watched repo has independent reindex state with `threading.Event`-based signaling, enabling agents to wait for freshness via `wait_for_fresh` or automatic strict-mode waits
 
 The `watch-claude` variant extends this for Claude Code specifically: it discovers worktrees via hook-driven events (`WorktreeCreate`/`WorktreeRemove` writing to a JSONL manifest) and/or by polling `git worktree list` on specified repositories. Both mechanisms are cross-platform and layout-agnostic.
 

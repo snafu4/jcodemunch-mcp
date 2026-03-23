@@ -4,6 +4,7 @@ from collections.abc import Generator
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -32,6 +33,7 @@ from ..security import (
 from ..storage import IndexStore
 from ..storage.index_store import _file_hash, _get_git_head
 from ..summarizer import summarize_symbols
+from ..reindex_state import WatcherChange
 
 SKIP_DIRS_REGEX = re.compile("^(" + "|".join(SKIP_DIRECTORIES) + ")$")
 SKIP_FILES_REGEX = re.compile("(" + "|".join(re.escape(p) for p in SKIP_FILES) + ")$")
@@ -126,6 +128,8 @@ from ._indexing_pipeline import (
     complete_file_summaries as _complete_file_summaries,
     parse_and_prepare_incremental,
     parse_and_prepare_full,
+    parse_immediate,
+    deferred_summarize,
 )
 
 
@@ -328,7 +332,7 @@ def index_folder(
     follow_symlinks: bool = False,
     incremental: bool = True,
     context_providers: bool = True,
-    changed_paths: Optional[list[tuple[str, str]]] = None,
+    changed_paths: Optional[list[WatcherChange]] = None,
 ) -> dict:
     """Index a local folder containing source code.
 
@@ -396,6 +400,45 @@ def index_folder(
     try:
         t0 = time.monotonic()
 
+        # ── Deferred summarization helper (defined before fast path so it is in scope) ──
+
+        def _run_deferred_summarize(
+            gen: int,
+            repo_full: str,
+            symbols: list,
+            file_contents: dict,
+            store: "IndexStore",
+            owner: str,
+            repo_name: str,
+        ) -> None:
+            """Fill in AI summaries and update the store. Checks generation counter to abandon stale work."""
+            from ..reindex_state import _get_state
+            from ._indexing_pipeline import deferred_summarize
+
+            # Check 1: has a newer reindex started while we were parsing?
+            if _get_state(repo_full).deferred_generation != gen:
+                return
+
+            summarized = deferred_summarize(symbols, file_contents, use_ai_summaries=True)
+            if not summarized:
+                return
+
+            # Check 2: has another reindex started while we were summarizing?
+            if _get_state(repo_full).deferred_generation != gen:
+                return
+
+            # Update only the symbol summaries (empty change lists → INSERT OR REPLACE updates existing rows)
+            try:
+                store.incremental_save(
+                    owner=owner, name=repo_name,
+                    changed_files=[], new_files=[], deleted_files=[],
+                    new_symbols=summarized,
+                    raw_files={},
+                )
+                logger.debug("Deferred summarization saved %d symbols for %s", len(summarized), repo_full)
+            except Exception as e:
+                logger.warning("Deferred summarization failed for %s: %s", repo_full, e)
+
         # ── Fast path: watcher-driven incremental reindex ──
         # When the watcher provides the exact change set, skip full directory
         # discovery (~3s on Windows) and only process the affected files.
@@ -403,9 +446,33 @@ def index_folder(
             repo_name = _local_repo_name(folder_path)
             owner = "local"
             store = IndexStore(base_path=storage_path)
-            existing_index = store.load_index(owner, repo_name)
 
-            if existing_index is not None:
+            # Determine if watcher provided old_hash via WatcherChange objects.
+            # If so, we can skip loading the index and use the memory-cached hashes.
+            watcher_changes_with_hashes = [
+                c for c in changed_paths
+                if isinstance(c, WatcherChange) and c.old_hash
+            ]
+            use_memory_hash_cache = bool(watcher_changes_with_hashes)
+
+            existing_index = store.load_index(owner, repo_name) if not use_memory_hash_cache else None
+
+            # Build memory hash map from WatcherChange objects (from watcher memory cache)
+            _old_hash_map: dict[str, str] = {}
+            if use_memory_hash_cache:
+                for wc in watcher_changes_with_hashes:
+                    # Use index access for both WatcherChange and legacy tuple compat
+                    change_type = wc[0]
+                    abs_path_str = wc[1]
+                    old_hash = wc[2]
+                    abs_path = Path(abs_path_str)
+                    try:
+                        rel_path = abs_path.relative_to(folder_path).as_posix()
+                    except ValueError:
+                        continue
+                    _old_hash_map[rel_path] = old_hash
+
+            if existing_index is not None or use_memory_hash_cache:
                 # Skip discover_providers on the watcher fast path — provider
                 # detection walks the tree (~500ms) and providers don't change
                 # between file edits.  The initial index_folder call (without
@@ -418,7 +485,18 @@ def index_folder(
                 deleted_files: list[str] = []
                 rel_path_map_fast: dict[str, Path] = {}
 
-                for change_type, abs_path_str in changed_paths:
+                for wc_item in changed_paths:
+                    # Support both WatcherChange (with .change_type/.path/.old_hash)
+                    # and legacy (change_type, path) or (change_type, path, old_hash) tuples
+                    if isinstance(wc_item, WatcherChange):
+                        change_type = wc_item.change_type
+                        abs_path_str = wc_item.path
+                        old_hash = wc_item.old_hash
+                    else:
+                        change_type = wc_item[0]
+                        abs_path_str = wc_item[1]
+                        old_hash = wc_item[2] if len(wc_item) > 2 else ""
+
                     abs_path = Path(abs_path_str)
                     try:
                         rel_path = abs_path.relative_to(folder_path).as_posix()
@@ -430,10 +508,14 @@ def index_folder(
                         continue
 
                     if change_type == "deleted":
-                        if existing_index.has_source_file(rel_path):
+                        if use_memory_hash_cache:
+                            # Memory cache path: the watcher confirmed this file was
+                            # in the index (it was in the hash cache), so trust it.
+                            deleted_files.append(rel_path)
+                        elif existing_index is not None and existing_index.has_source_file(rel_path):
                             deleted_files.append(rel_path)
                     elif change_type == "added":
-                        if not existing_index.has_source_file(rel_path):
+                        if existing_index is None or not existing_index.has_source_file(rel_path):
                             new_files.append(rel_path)
                             rel_path_map_fast[rel_path] = abs_path
                         else:
@@ -458,7 +540,14 @@ def index_folder(
                 # For "modified" files, compare hash against stored hash —
                 # if content is identical (e.g. touch, save-without-change),
                 # skip re-parsing and just update the mtime.
-                old_hashes = existing_index.file_hashes or {}
+                # Use memory cache (_old_hash_map) if available, otherwise fall back to
+                # the index's stored hashes.
+                old_hashes: dict[str, str]
+                if use_memory_hash_cache:
+                    old_hashes = _old_hash_map
+                else:
+                    _idx = existing_index  # type: ignore[assignment]
+                    old_hashes = _idx.file_hashes or {}
                 actually_changed: list[str] = []
                 raw_files_subset: dict[str, str] = {}
                 subset_hashes: dict[str, str] = {}
@@ -518,12 +607,12 @@ def index_folder(
                     }
 
                 files_to_parse = set(changed_files) | set(new_files)
+                # Split pipeline: parse immediately (no AI), fire summarization thread.
                 new_symbols, incr_file_summaries, incr_file_languages, incr_file_imports, incremental_no_symbols = (
-                    parse_and_prepare_incremental(
+                    parse_immediate(
                         files_to_parse=files_to_parse,
                         file_contents=raw_files_subset,
                         active_providers=active_providers,
-                        use_ai_summaries=use_ai_summaries,
                         warnings=fast_warnings,
                     )
                 )
@@ -533,6 +622,13 @@ def index_folder(
 
                 # Merge mtime-only updates so they're persisted alongside real changes
                 all_mtimes = {**mtime_only_updates, **fast_mtimes}
+
+                # Capture deferred generation BEFORE incremental_save to avoid a race:
+                # if mark_reindex_start fires between save and read, the deferred thread
+                # would incorrectly think it belongs to the newer generation.
+                _repo_full = f"{owner}/{repo_name}"
+                from ..reindex_state import _get_state
+                _deferred_gen = _get_state(_repo_full).deferred_generation
 
                 updated = store.incremental_save(
                     owner=owner, name=repo_name,
@@ -547,6 +643,20 @@ def index_folder(
                     file_hashes=subset_hashes,
                     file_mtimes=all_mtimes,
                 )
+
+                # Fire daemon thread for deferred summarization — index is already saved
+                # with empty summaries; this fills them in without blocking the response.
+                if new_symbols and use_ai_summaries:
+                    _summaries_copy = list(new_symbols)
+                    _contents_copy = dict(raw_files_subset)
+                    _daemon = threading.Thread(
+                        target=lambda _g=_deferred_gen, _s=_summaries_copy, _c=_contents_copy: _run_deferred_summarize(
+                            _g, _repo_full, _s, _c, store, owner, repo_name,
+                        ),
+                        daemon=True,
+                        name="deferred-summarizer",
+                    )
+                    _daemon.start()
 
                 result = {
                     "success": True,
