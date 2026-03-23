@@ -43,6 +43,12 @@ from .tools.get_context_bundle import get_context_bundle
 from .parser.symbols import VALID_KINDS
 from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
 
+try:
+    from .watcher import watch_folders, WatcherError
+except ImportError:
+    watch_folders = None  # type: ignore[assignment, misc]
+    WatcherError = type("WatcherError", (Exception,), {})  # type: ignore[assignment, misc]
+
 
 # Tools excluded from strict freshness mode (don't wait for reindex)
 _EXCLUDED_FROM_STRICT = frozenset({
