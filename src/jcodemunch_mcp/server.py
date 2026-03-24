@@ -781,9 +781,17 @@ def _apply_description_overrides(tools: list) -> None:
     shared = descriptions.get("_shared", {})
 
     for tool in tools:
-        tool_desc = descriptions.get(tool.name, {})
+        raw = descriptions.get(tool.name)
+        if raw is None:
+            tool_desc: dict = {}
+        elif isinstance(raw, str):
+            # Flat format: "tool_name": "description" → override tool description only
+            tool.description = raw
+            tool_desc = {}
+        else:
+            tool_desc = raw
 
-        # Override tool-level description
+        # Nested format: override tool-level description via "_tool" key
         # "_tool": "" means "use hardcoded minimal base only" (empty string override)
         if "_tool" in tool_desc:
             tool.description = tool_desc["_tool"]

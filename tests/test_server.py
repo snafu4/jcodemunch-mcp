@@ -811,6 +811,32 @@ async def test_descriptions_empty_string_param_clears_description():
         config_module._GLOBAL_CONFIG.update(orig_config)
 
 
+@pytest.mark.asyncio
+async def test_descriptions_flat_string_overrides_tool_description():
+    """Flat string format 'tool_name': 'description' overrides tool description."""
+    from jcodemunch_mcp import config as config_module
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["descriptions"] = {
+            "search_symbols": "Find symbols in this Python project",
+        }
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        search_symbols = next(t for t in tools if t.name == "search_symbols")
+        assert search_symbols.description == "Find symbols in this Python project"
+
+        # Param descriptions should be unchanged (flat format doesn't touch params)
+        repo_param = search_symbols.inputSchema.get("properties", {}).get("repo", {})
+        assert repo_param.get("description")  # should still have original description
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
 # ── Meta Fields Partial List Test (E1) ─────────────────────────────────────────────
 
 
