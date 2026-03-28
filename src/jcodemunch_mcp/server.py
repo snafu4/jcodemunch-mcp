@@ -2365,19 +2365,46 @@ def main(argv: Optional[list[str]] = None):
                 )
                 sys.exit(1)
 
-            watcher_paths = args.watcher_path or [os.getcwd()]
+            # Watcher params: CLI flag > config > default
+            cfg_paths = config_module.get("watch_paths", [])
+            if args.watcher_path is not None:
+                watcher_paths = args.watcher_path
+            elif cfg_paths:
+                watcher_paths = cfg_paths
+            else:
+                watcher_paths = [os.getcwd()]
+
             use_ai = not args.watcher_no_ai_summaries and _default_use_ai_summaries()
+
             watcher_kwargs = dict(
                 paths=watcher_paths,
-                debounce_ms=args.watcher_debounce,
+                debounce_ms=(
+                    args.watcher_debounce
+                    if args.watcher_debounce is not None
+                    else config_module.get("watch_debounce_ms", 2000)
+                ),
                 use_ai_summaries=use_ai,
                 storage_path=os.environ.get("CODE_INDEX_PATH"),
-                extra_ignore_patterns=args.watcher_extra_ignore,
-                follow_symlinks=args.watcher_follow_symlinks,
-                idle_timeout_minutes=args.watcher_idle_timeout,
+                extra_ignore_patterns=(
+                    args.watcher_extra_ignore
+                    if args.watcher_extra_ignore is not None
+                    else config_module.get("watch_extra_ignore", []) or None
+                ),
+                follow_symlinks=(
+                    args.watcher_follow_symlinks
+                    or config_module.get("watch_follow_symlinks", False)
+                ),
+                idle_timeout_minutes=(
+                    args.watcher_idle_timeout
+                    if args.watcher_idle_timeout is not None
+                    else config_module.get("watch_idle_timeout", None)
+                ),
             )
 
-            log_path = getattr(args, "watcher_log", None)
+            log_path = (
+                getattr(args, "watcher_log", None)
+                or config_module.get("watch_log", None)
+            )
 
             try:
                 if args.transport == "sse":
