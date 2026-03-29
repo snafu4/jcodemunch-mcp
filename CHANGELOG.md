@@ -4,6 +4,11 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-03-29
+
+### Added
+- **`.razor` (Blazor component) file support** — `.razor` extension now mapped to the `razor` language spec alongside `.cshtml`. `_parse_razor_symbols` extended to emit `@page` route directives and `@inject` dependency injection bindings as constant symbols, making Blazor component routes and injected services first-class navigable symbols. Includes `Counter.razor` test fixture and 8 new tests (1298 total). Contributed by drax1222 (PR #182).
+
 ## [1.12.1] - 2026-03-28
 
 ### Fixed
