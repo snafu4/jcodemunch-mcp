@@ -1856,9 +1856,9 @@ def _run_config(check: bool = False, init: bool = False) -> None:
     section("Meta Response Control")
     meta_fields = _cfg.get("meta_fields")
     if meta_fields is None:
-        row("meta_fields", dim("(all fields)"), "default")
+        row("meta_fields", dim("(all fields)"), "config")
     elif meta_fields == []:
-        row("meta_fields", dim("(none)"), "config")
+        row("meta_fields", dim("(none)"), _detect_source("meta_fields", []))
     else:
         row("meta_fields", _fmt_list(meta_fields), _detect_source("meta_fields", None))
 

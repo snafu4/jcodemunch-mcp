@@ -42,6 +42,20 @@ SKIP_DIRS_REGEX = re.compile("^(" + "|".join(SKIP_DIRECTORIES) + ")$")
 SKIP_FILES_REGEX = re.compile("(" + "|".join(re.escape(p) for p in SKIP_FILES) + ")$")
 
 
+def _maybe_apply_adaptive(folder_path: str, result: dict) -> None:
+    """Apply adaptive language config if enabled. Never raises."""
+    if not isinstance(result, dict) or not result.get("success"):
+        return
+    detected = set(result.get("languages", {}).keys())
+    if not detected:
+        return
+    try:
+        from ..config import apply_adaptive_languages
+        apply_adaptive_languages(str(folder_path), detected)
+    except Exception:
+        logger.debug("adaptive language update skipped", exc_info=True)
+
+
 def get_filtered_files(path: str) -> Generator[str, None, None]:
     """Generator function to filter directories and files"""
     # Use os.walk with followlinks=False to avoid infinite loops caused by
@@ -753,6 +767,7 @@ def index_folder(
                 }
                 if fast_warnings:
                     result["warnings"] = fast_warnings
+                _maybe_apply_adaptive(folder_path, result)
                 return result
 
         # ── Standard path: full directory discovery ──
@@ -939,6 +954,7 @@ def index_folder(
             }
             if warnings:
                 result["warnings"] = warnings
+            _maybe_apply_adaptive(folder_path, result)
             return result
 
         # Full index path — stream through files one at a time to avoid
@@ -1074,6 +1090,7 @@ def index_folder(
             )
             result.setdefault("warnings", []).append(cap_warning)
 
+        _maybe_apply_adaptive(folder_path, result)
         return result
 
     except Exception as e:

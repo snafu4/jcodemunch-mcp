@@ -681,16 +681,16 @@ def test_v5_schema_no_json_in_data(tmp_path):
 
 
 def test_db_mtime_ns_no_wal(tmp_path):
-    """_db_mtime_ns returns .db mtime when WAL file is absent."""
+    """_db_mtime_ns returns .db mtime when no WAL file exists."""
     from jcodemunch_mcp.storage.sqlite_store import _db_mtime_ns
-    store = SQLiteIndexStore(base_path=str(tmp_path))
+    import sqlite3
+
     db_path = tmp_path / "test.db"
-    conn = store._connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     conn.close()
 
-    # WAL should not exist
-    wal_path = db_path.with_suffix(".db-wal")
-    assert not wal_path.exists(), "WAL file should not exist for this test"
+    wal_path = Path(str(db_path) + "-wal")
+    assert not wal_path.exists()
 
     result = _db_mtime_ns(db_path)
     assert result == db_path.stat().st_mtime_ns
@@ -713,7 +713,7 @@ def test_db_mtime_ns_wal_newer(tmp_path):
     conn.close()
 
     # Manually create a WAL file with newer mtime
-    wal_path = db_path.with_suffix(".db-wal")
+    wal_path = Path(str(db_path) + "-wal")
     wal_path.write_bytes(b"")  # Create empty WAL file
     time.sleep(0.01)
     wal_path.touch()  # Make WAL newer
@@ -740,7 +740,7 @@ def test_db_mtime_ns_wal_older(tmp_path):
     conn.close()
 
     # Manually create a WAL file with older mtime
-    wal_path = db_path.with_suffix(".db-wal")
+    wal_path = Path(str(db_path) + "-wal")
     wal_path.write_bytes(b"")  # Create empty WAL file
     time.sleep(0.01)
     db_path.touch()  # Make db newer

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -52,7 +53,197 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_LOG_LEVEL": "log_level",
     "JCODEMUNCH_LOG_FILE": "log_file",
     "JCODEMUNCH_PATH_MAP": "path_map",
+    "JCODEMUNCH_TRUSTED_FOLDERS_ENV": "trusted_folders",
 }
+
+
+def _global_config_path() -> Path:
+    """Return the path to the global config.jsonc."""
+    storage = os.environ.get("CODE_INDEX_PATH", str(Path.home() / ".code-index"))
+    return Path(storage) / "config.jsonc"
+
+
+def _global_storage_path() -> Path:
+    """Return the global storage directory path."""
+    return Path(os.environ.get("CODE_INDEX_PATH", str(Path.home() / ".code-index")))
+
+
+_LANG_BLOCK_RE = re.compile(
+    r'("languages"\s*:\s*)(\[.*?\]|null)',
+    re.DOTALL
+)
+# NOTE: The non-greedy \[.*?\] pattern will break if a ] character appears
+# inside a comment within the languages block (e.g., // see note [1]).
+# This cannot happen with auto-generated content but is a limitation for
+# hand-edited configs containing such patterns.
+
+
+def _parse_active_languages(content: str) -> set[str] | None:
+    """Extract uncommented language names from the languages array in JSONC content.
+
+    Returns:
+        set of active language names, or
+        None if the languages key is null or absent (meaning "all languages").
+    """
+    m = _LANG_BLOCK_RE.search(content)
+    if not m:
+        return None
+    block = m.group(2)
+    if block.strip() == "null":
+        return None
+    active = set()
+    for line in block.splitlines():
+        # Strip inline // comments before matching (handle "python", // comment style)
+        code_part = line.split("//")[0]
+        code_stripped = code_part.strip()
+        if code_stripped.startswith("//"):
+            continue
+        for lang_m in re.finditer(r'"([a-z_+#]+)"', code_stripped):
+            active.add(lang_m.group(1))
+    return active
+
+
+def _build_languages_block(detected: set[str]) -> str:
+    """Build a languages array block with detected languages uncommented."""
+    from .parser.languages import LANGUAGE_REGISTRY
+    all_langs = sorted(LANGUAGE_REGISTRY.keys())
+    lines = []
+    for lang in all_langs:
+        if lang in detected:
+            lines.append(f'     "{lang}",')
+        else:
+            lines.append(f'     // "{lang}",')
+    return '"languages": [\n' + '\n'.join(lines) + '\n  ]'
+
+
+def invalidate_project_config_cache(source_root: str) -> None:
+    """Evict source_root from the project config cache, forcing reload on next access."""
+    resolved = str(Path(source_root).resolve())
+    with _CONFIG_LOCK:
+        _PROJECT_CONFIGS.pop(resolved, None)
+        _PROJECT_CONFIG_HASHES.pop(resolved, None)
+
+
+def _check_raw_local_adaptive(local_path: Path) -> tuple[bool, str]:
+    """Check if languages_adaptive is True in the raw (unmerged) local config file.
+
+    Reads and parses the JSONC file directly — does NOT use the merged
+    _PROJECT_CONFIGS cache, because the user requires that when a local
+    config exists, ONLY the local file's languages_adaptive value matters
+    (absent = False, not inherited from global).
+
+    Returns:
+        Tuple of (is_adaptive, content) — content is the raw file text.
+    """
+    try:
+        content = local_path.read_text(encoding="utf-8-sig")
+        raw = json.loads(_strip_jsonc(content))
+        return bool(raw.get("languages_adaptive", False)), content
+    except (json.JSONDecodeError, ValueError, OSError):
+        return False, ""
+
+
+def _apply_languages_adaptation(content: str, detected: set[str]) -> str | None:
+    """Apply language adaptation to content, replacing the languages block.
+
+    Returns the adapted content, or None if no languages block exists to adapt.
+
+    Note: The regex uses non-greedy matching which may break if a ] character
+    appears inside a comment within the languages block (e.g., // see note [1]).
+    This cannot happen with auto-generated content but is a limitation for
+    hand-edited configs.
+    """
+    active = _parse_active_languages(content)
+    # active is None when languages key is null/absent → always update (convert to array)
+    if active is not None and active == detected:
+        return None  # no change needed
+
+    new_block = _build_languages_block(detected)
+    m = _LANG_BLOCK_RE.search(content)
+    if not m:
+        logger.debug("No languages block found — cannot apply adaptation")
+        return None
+
+    new_content = content[:m.start()] + new_block + content[m.end():]
+    return new_content
+
+
+def apply_adaptive_languages(source_root: str, detected: set[str]) -> bool:
+    """Apply adaptive language configuration to {source_root}/.jcodemunch.jsonc.
+
+    Decision tree:
+      No local config + global languages_adaptive=True  → create from global copy + adapt
+      Local config   + raw local languages_adaptive=True → surgical update
+      Otherwise                                          → no-op
+
+    Returns True if the file was created or modified.
+    """
+    if not detected:
+        return False
+
+    local_path = Path(source_root) / ".jcodemunch.jsonc"
+    created = False
+
+    if not local_path.exists():
+        # ─── Stage 1: no local config — check global ─────────────────────────
+        if not _GLOBAL_CONFIG.get("languages_adaptive", False):
+            return False
+        global_path = _global_config_path()
+        if global_path.exists():
+            content = global_path.read_text(encoding="utf-8")
+        else:
+            content = generate_template()
+        # Ensure languages_adaptive: true is written to the new local config
+        # Handle both commented-out (// "languages_adaptive": false,) and active keys
+        lines = content.splitlines()
+        new_lines = []
+        key_found = False
+        for line in lines:
+            if '"languages_adaptive"' in line:
+                # Replace any version of this line (commented or not)
+                new_lines.append('  "languages_adaptive": true,')
+                key_found = True
+            else:
+                new_lines.append(line)
+        if not key_found:
+            # Insert after opening brace line
+            final_lines = []
+            for line in new_lines:
+                final_lines.append(line)
+                if line.strip() == "{":
+                    final_lines.append('  "languages_adaptive": true,')
+            new_lines = final_lines
+        content = "\n".join(new_lines)
+
+        # Apply language adaptation BEFORE the first write (avoids double-write)
+        adapted = _apply_languages_adaptation(content, detected)
+        if adapted is not None:
+            content = adapted
+        # Always write in Stage 1 — the file doesn't exist yet and needs
+        # languages_adaptive: true at minimum, even if languages already match.
+        local_path.write_text(content, encoding="utf-8")
+        invalidate_project_config_cache(source_root)
+        logger.info("Created project config from global: %s", local_path)
+        return True
+    else:
+        # ─── Stage 2: local config exists — check RAW local value ─────────────
+        is_adaptive, content = _check_raw_local_adaptive(local_path)
+        if not is_adaptive:
+            return False
+        # content is already loaded — no second read needed
+
+    # ─── Apply adaptation ────────────────────────────────────────────────────────
+    new_content = _apply_languages_adaptation(content, detected)
+    if new_content is None:
+        return False  # no change needed or no block to adapt
+
+    if new_content == content:
+        return False
+
+    local_path.write_text(new_content, encoding="utf-8")
+    invalidate_project_config_cache(source_root)
+    logger.info("Adaptive languages: %s → %s", local_path, sorted(detected))
+    return True
 
 DEFAULTS = {
     "use_ai_summaries": True,
@@ -68,8 +259,9 @@ DEFAULTS = {
     "exclude_secret_patterns": [],
     "extra_extensions": {},
     "context_providers": True,
-    "meta_fields": None,  # None = all fields
+    "meta_fields": [],  # [] = no _meta (token-efficient; set null in config for all fields)
     "languages": None,  # None = all languages
+    "languages_adaptive": False,
     "disabled_tools": [],
     "descriptions": {},
     "transport": "stdio",
@@ -111,6 +303,7 @@ CONFIG_TYPES = {
     "context_providers": bool,
     "meta_fields": (list, type(None)),
     "languages": (list, type(None)),
+    "languages_adaptive": bool,
     "disabled_tools": list,
     "descriptions": dict,
     "transport": str,
@@ -255,9 +448,7 @@ def load_config(storage_path: str | None = None) -> None:
     if storage_path:
         config_path = Path(storage_path) / "config.jsonc"
     else:
-        # Respect CODE_INDEX_PATH env var for config file location
-        index_path = os.environ.get("CODE_INDEX_PATH", str(Path.home() / ".code-index"))
-        config_path = Path(index_path) / "config.jsonc"
+        config_path = _global_config_path()
 
     # Auto-create default config if missing
     if not config_path.exists():
@@ -435,8 +626,7 @@ def _resolve_repo_key(repo: str) -> str | None:
         return cached
     try:
         from .storage.index_store import IndexStore
-        storage_path = os.environ.get("CODE_INDEX_PATH", str(Path.home() / ".code-index"))
-        store = IndexStore(base_path=storage_path)
+        store = IndexStore(base_path=str(_global_storage_path()))
         repos = store.list_repos()
         for entry in repos:
             source_root = entry.get("source_root", "")
@@ -793,8 +983,8 @@ def generate_template() -> str:
 
   // === Meta Response Control ===
   // Allowlist of _meta fields to include in responses.
-  // Empty list = no _meta at all (maximum token savings).
-  // Absent/null = all fields included (backward compatible default).
+  // [] (default) = no _meta at all (maximum token savings).
+  // null = all fields included (set explicitly to opt in).
   // Uncomment and set to a list of field names to include only those fields.
   // All available meta fields (sorted alphabetically, each on its own line):
   "meta_fields": [
@@ -809,6 +999,14 @@ def generate_template() -> str:
   "languages": [
      {lang_str}
   ],
+
+  // "languages_adaptive": false,
+  //   When true, jcodemunch auto-manages the languages list in this
+  //   project's .jcodemunch.jsonc based on detected languages.
+  //   Detected languages are uncommented; unused ones are commented out.
+  //   Runs on every index_folder call (full and incremental).
+  //   Set in global config to auto-create project configs on first index.
+  //   Set in project config to enable ongoing adaptation.
 
   // === Disabled Tools ===
   // Global: tools listed here are removed from the schema entirely.

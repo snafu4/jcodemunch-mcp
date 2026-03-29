@@ -280,7 +280,7 @@ class TestConfigLoading:
             assert get("meta_fields") == ["timing_ms", "powered_by"]
 
     def test_meta_fields_absent_uses_default(self):
-        """meta_fields absent from config uses default (None = all fields)."""
+        """meta_fields absent from config uses default ([] = no metadata)."""
         from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG, DEFAULTS
 
         _GLOBAL_CONFIG.clear()
@@ -291,8 +291,8 @@ class TestConfigLoading:
 
             load_config(tmpdir)
 
-            # When not specified, should use DEFAULTS value
-            assert get("meta_fields") is None
+            # When not specified, should use DEFAULTS value ([] = no metadata)
+            assert get("meta_fields") == []
 
     def test_type_mismatch_logs_warning_and_uses_default(self, monkeypatch, caplog):
         """Should log warning and use default on type mismatch."""
@@ -1631,7 +1631,7 @@ class TestConfigTypeValidation:
             assert get("log_level") == ""
 
     def test_meta_fields_dict_type_mismatch(self):
-        """meta_fields as dict should fall back to None (all fields)."""
+        """meta_fields as dict should fall back to [] (no metadata)."""
         from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG
 
         _GLOBAL_CONFIG.clear()
@@ -1642,7 +1642,7 @@ class TestConfigTypeValidation:
 
             load_config(tmpdir)
 
-            assert get("meta_fields") is None
+            assert get("meta_fields") == []
 
 
 class TestProjectConfigEdgeCases:
