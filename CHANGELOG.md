@@ -4,6 +4,11 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.12.6] - 2026-03-29
+
+### Fixed
+- **Gemini `CODE_RETRIEVAL_QUERY` KeyError on legacy SDK** (follow-up to #181) — The legacy `google-generativeai` package does not include `CODE_RETRIEVAL_QUERY` in its `TaskType` proto enum (it was introduced in the newer `google-genai` SDK). Passing that string to `genai.embed_content` caused a `KeyError` during semantic search. A new `_normalise_gemini_task_type` helper probes the installed SDK's `TaskType` enum at runtime and falls back `CODE_RETRIEVAL_QUERY` → `RETRIEVAL_QUERY` on legacy installs, producing equivalent retrieval quality. New SDK installs with `CODE_RETRIEVAL_QUERY` are unaffected. 5 new tests (1322 total).
+
 ## [1.12.5] - 2026-03-29
 
 ### Added

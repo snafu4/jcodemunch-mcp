@@ -556,3 +556,62 @@ def test_embedding_store_task_type_persist_and_retrieve(tmp_path):
     es2.set_task_type("")  # clearing
     es3 = EmbeddingStore(db_path)
     assert es3.get_task_type() == ""
+
+
+# ── Unit: _normalise_gemini_task_type ─────────────────────────────────────────
+
+class _FakeTaskType:
+    """Minimal stand-in for genai.protos.TaskType enum entries."""
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeGenai:
+    """Stand-in for google.generativeai module with a limited TaskType enum."""
+    class protos:
+        TaskType = [
+            _FakeTaskType("RETRIEVAL_QUERY"),
+            _FakeTaskType("RETRIEVAL_DOCUMENT"),
+        ]
+
+
+class _NewGenai:
+    """Stand-in for a newer SDK that also has CODE_RETRIEVAL_QUERY."""
+    class protos:
+        TaskType = [
+            _FakeTaskType("RETRIEVAL_QUERY"),
+            _FakeTaskType("RETRIEVAL_DOCUMENT"),
+            _FakeTaskType("CODE_RETRIEVAL_QUERY"),
+        ]
+
+
+def test_normalise_gemini_task_type_none_passthrough():
+    from jcodemunch_mcp.tools.embed_repo import _normalise_gemini_task_type
+    assert _normalise_gemini_task_type(_FakeGenai, None) is None
+
+
+def test_normalise_gemini_task_type_supported_passes_through():
+    """RETRIEVAL_DOCUMENT is in both old and new SDK — should return as-is."""
+    from jcodemunch_mcp.tools.embed_repo import _normalise_gemini_task_type
+    assert _normalise_gemini_task_type(_FakeGenai, "RETRIEVAL_DOCUMENT") == "RETRIEVAL_DOCUMENT"
+
+
+def test_normalise_gemini_task_type_code_retrieval_falls_back_on_old_sdk():
+    """CODE_RETRIEVAL_QUERY absent from old SDK → falls back to RETRIEVAL_QUERY."""
+    from jcodemunch_mcp.tools.embed_repo import _normalise_gemini_task_type
+    result = _normalise_gemini_task_type(_FakeGenai, "CODE_RETRIEVAL_QUERY")
+    assert result == "RETRIEVAL_QUERY"
+
+
+def test_normalise_gemini_task_type_code_retrieval_passes_on_new_sdk():
+    """CODE_RETRIEVAL_QUERY present in new SDK → returned unchanged."""
+    from jcodemunch_mcp.tools.embed_repo import _normalise_gemini_task_type
+    result = _normalise_gemini_task_type(_NewGenai, "CODE_RETRIEVAL_QUERY")
+    assert result == "CODE_RETRIEVAL_QUERY"
+
+
+def test_normalise_gemini_task_type_unsupported_no_fallback_returns_none():
+    """Unknown task type with no fallback entry → None (omit from API call)."""
+    from jcodemunch_mcp.tools.embed_repo import _normalise_gemini_task_type
+    result = _normalise_gemini_task_type(_FakeGenai, "CLUSTERING")
+    assert result is None

@@ -71,6 +71,44 @@ def _gemini_task_aware() -> bool:
     )
 
 
+# CODE_RETRIEVAL_QUERY was added in the newer google-genai SDK; the legacy
+# google-generativeai SDK only exposes RETRIEVAL_QUERY.
+_GEMINI_TASK_TYPE_FALLBACKS: dict[str, str] = {
+    "CODE_RETRIEVAL_QUERY": "RETRIEVAL_QUERY",
+}
+
+
+def _normalise_gemini_task_type(genai_module, task_type: Optional[str]) -> Optional[str]:
+    """Return the task_type value accepted by the installed Gemini SDK.
+
+    Probes the SDK's ``TaskType`` proto enum at runtime so we degrade
+    gracefully on legacy ``google-generativeai`` (which lacks
+    ``CODE_RETRIEVAL_QUERY``) without requiring a version check.
+    """
+    if not task_type:
+        return None
+    try:
+        supported = {e.name for e in genai_module.protos.TaskType}
+        if task_type in supported:
+            return task_type
+        fallback = _GEMINI_TASK_TYPE_FALLBACKS.get(task_type)
+        if fallback and fallback in supported:
+            logger.debug(
+                "Gemini SDK does not support task_type=%r; using %r instead",
+                task_type,
+                fallback,
+            )
+            return fallback
+        logger.debug(
+            "Gemini SDK does not support task_type=%r and no fallback found; omitting",
+            task_type,
+        )
+        return None
+    except Exception:
+        # Cannot introspect the enum — pass through and let the API call surface errors.
+        return task_type
+
+
 def _embed_gemini(
     texts: list[str], model_name: str, task_type: Optional[str] = None
 ) -> list[list[float]]:
@@ -83,11 +121,13 @@ def _embed_gemini(
         ) from exc
     api_key = os.environ.get("GOOGLE_API_KEY", "")
     genai.configure(api_key=api_key)
+    # Resolve to a task type the installed SDK actually supports.
+    effective_task_type = _normalise_gemini_task_type(genai, task_type)
     results = []
     for text in texts:
         kwargs: dict = {}
-        if task_type:
-            kwargs["task_type"] = task_type
+        if effective_task_type:
+            kwargs["task_type"] = effective_task_type
         resp = genai.embed_content(model=model_name, content=text, **kwargs)
         results.append(list(map(float, resp["embedding"])))
     return results
