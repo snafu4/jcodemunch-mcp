@@ -2,7 +2,9 @@
 
 > **Quick setup:** [QUICKSTART.md](QUICKSTART.md) · **Full tool reference:** [USER_GUIDE.md](USER_GUIDE.md)
 
-Installing jCodeMunch makes the tools available. It does **not** guarantee your agent will stop opening files like a confused tourist with a flashlight.
+Installing jCodeMunch makes the tools available. It does **not** guarantee your agent will use them.
+
+The common failure mode isn't forgetting — it's skipping. The agent sees the rule in CLAUDE.md and reaches for Read or Grep anyway because native tools feel faster under pressure or in a long session. A prompt policy can't stop this. The hooks below intercept at the tool-call level: they fire *before* the shortcut executes and redirect Claude before the bypass happens.
 
 This document covers two ways to enforce usage:
 

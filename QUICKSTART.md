@@ -74,7 +74,8 @@ Always use jCodemunch-MCP tools — never fall back to Read, Grep, Glob, or Bash
 
 You can also add the same block to a project-level `CLAUDE.md` in your repo root.
 
-> **Note:** For a comprehensive guide on enforcing these rules through agent hooks and prompt policies, see [AGENT_HOOKS.md](AGENT_HOOKS.md).
+> [!IMPORTANT]
+> **CLAUDE.md is a soft rule.** It works well under normal conditions, but agents can ignore it when moving fast, under load, or deep in a complex task — not because they forgot, but because native tools feel faster in the moment. If you need reliable enforcement, install the [hook scripts](AGENT_HOOKS.md) — they intercept `Grep`, `Glob`, and `Bash` at the tool-call level and redirect Claude before the shortcut fires.
 
 ---
 
@@ -112,6 +113,10 @@ You can also add the same block to a project-level `CLAUDE.md` in your repo root
 **Claude isn't calling jCodeMunch tools**
 → Check that `CLAUDE.md` exists and contains the Code Exploration Policy above.
 → Run `/mcp` in Claude Code to confirm the server is connected.
+
+**Claude uses jCodeMunch in simple tasks but falls back to Read/Grep in complex ones**
+→ This is the "pressure bypass" — the agent sees the rule and skips it anyway because native tools feel faster.
+→ CLAUDE.md can't stop this. Install the enforcement hooks: [AGENT_HOOKS.md](AGENT_HOOKS.md).
 
 **`jcodemunch-mcp` not found**
 → Use `uvx jcodemunch-mcp` in your config instead of the bare command name — it bypasses PATH entirely.
