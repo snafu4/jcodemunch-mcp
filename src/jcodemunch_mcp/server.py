@@ -1945,11 +1945,16 @@ def _run_config(check: bool = False, init: bool = False) -> None:
         print(f"  Active provider:  {green('GLM-5')}  ({suffix})")
         row("  OPENAI_API_BASE", "https://api.z.ai/api/paas/v4/", "default")
         row("  OPENAI_MODEL", "glm-5", "default")
+    elif provider_name == "openrouter":
+        suffix = "JCODEMUNCH_SUMMARIZER_PROVIDER=openrouter" if provider == "openrouter" else "OPENROUTER_API_KEY set"
+        print(f"  Active provider:  {green('OpenRouter')}  ({suffix})")
+        row("  OPENAI_API_BASE", "https://openrouter.ai/api/v1", "default")
+        row("  OPENAI_MODEL", "meta-llama/llama-3.3-70b-instruct:free", "default")
     elif provider == "none":
         print(f"  Active provider:  {yellow('none')} — explicitly disabled, signature fallback active")
     else:
         print(f"  Active provider:  {yellow('none')} — no API key set, signature fallback active")
-        print(f"  {dim('Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_BASE, MINIMAX_API_KEY, or ZHIPUAI_API_KEY to enable')}")
+        print(f"  {dim('Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_BASE, MINIMAX_API_KEY, ZHIPUAI_API_KEY, or OPENROUTER_API_KEY to enable')}")
 
     # ── Transport ──────────────────────────────────────────────────────────
     section("Transport")

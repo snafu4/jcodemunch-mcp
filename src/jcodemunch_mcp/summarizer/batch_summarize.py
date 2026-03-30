@@ -637,6 +637,7 @@ def summarize_symbols(symbols: list[Symbol], use_ai: bool = True) -> list[Symbol
       3. OPENAI provider/base                         → OpenAI-compatible endpoint
       4. MINIMAX_API_KEY set or provider=minimax     → MiniMax M2.7
       5. ZHIPUAI_API_KEY set or provider=glm         → GLM-5
+      6. OPENROUTER_API_KEY set or provider=openrouter → OpenRouter
       - None set               → skip to Tier 3
     """
     # Tier 1: Extract from docstrings
