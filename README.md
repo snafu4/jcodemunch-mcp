@@ -57,6 +57,20 @@ Index once. Query cheaply. Keep moving.
 [![PyPI version](https://img.shields.io/pypi/v/jcodemunch-mcp)](https://pypi.org/project/jcodemunch-mcp/)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/jcodemunch-mcp)](https://pypi.org/project/jcodemunch-mcp/)
 
+---
+
+### Mentioned by
+
+- **Artur Skowroński** (VirtusLab) — *"roughly 80% fewer tokens, or 5× more efficient — index once, query cheaply forever"* · [GitHub All-Stars #15](https://virtuslab.com/blog/ai/code-munch-mcp-your-agent-starts-navigating)
+- **Julian Horsey** (Geeky Gadgets) — *"3,850 tokens reduced to just 700 — a 5.5× improvement"* · [JCodeMunch AI Token Saver](https://www.geeky-gadgets.com/jcodemunch-mcp-token-savings/)
+- **Sion Williams** — *"preserving tokens for tasks that actually require reasoning rather than retrieval"* · [March 2026 AI Workflow Update](https://sionwilliams.com/posts/2026-03-06-ai-workflow-update/)
+- **Traci Lim** (AWS · ASEAN AI Lead) — featured in [5 Repos That Save Token Usage in Claude Code](https://www.tracilzw.com/posts/5-repos-save-token-usage-claude-code)
+- **Eric Grill** — *"smaller local models could pull precise context from huge repos — ~90% less context usage"* · [jCodemunch: Context Engine for AI Agents](https://www.ericgrill.com/blog/jcodemunch-mcp-context-engine-for-ai-agents)
+
+[Full recognition page →](https://j.gravelle.us/jCodeMunch/recognition.php)
+
+---
+
 > ## Commercial licenses
 >
 > jCodeMunch-MCP is **free for non-commercial use**.
