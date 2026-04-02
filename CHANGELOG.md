@@ -4,6 +4,18 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-04-01
+
+### Added
+- **`check_rename_safe(symbol_id, new_name)`** — new tool that detects name collisions before renaming a symbol. Scans the symbol's defining file and every file that imports it, checking for an existing symbol already using the proposed new name. Returns `{safe, conflicts, checked_files}`. Use before any rename/refactor to avoid silent breakage.
+- **`get_dead_code_v2()`** — enhanced dead-code detection with three independent evidence signals per function/method: (1) the symbol's file is not reachable from any entry point via the import graph, (2) no indexed symbol calls this symbol in the call graph, (3) the symbol name is not re-exported from any `__init__` or barrel file. Each result includes a `confidence` score (0.33 = 1 signal, 0.67 = 2 signals, 1.0 = all 3). More reliable than single-signal detection. Accepts `min_confidence` (default 0.5) and `include_tests` parameters.
+- **`get_extraction_candidates(file_path, min_complexity, min_callers)`** — new tool that identifies functions worth extracting to a shared module. A candidate must have high cyclomatic complexity (doing a lot) AND be called from multiple other files (already implicitly shared). Results ranked by `score = cyclomatic × caller_file_count`.
+- **Complexity metrics stored at index time** — `INDEX_VERSION` bumped from 6 to 7. Three new fields per symbol (functions and methods only): `cyclomatic` (McCabe complexity), `max_nesting` (bracket-nesting depth), `param_count`. Computed from symbol body text at index time via `parser/complexity.py`. Existing indexes are automatically migrated (columns added as NULL; re-index to populate). Consumed by `get_extraction_candidates`.
+- **37 new tests** (1568 total, 7 skipped): `test_complexity.py`, `test_check_rename_safe.py`, `test_dead_code_v2.py`, `test_extraction_candidates.py`.
+
+### Changed
+- `INDEX_VERSION` is now 7 (was 6). Re-index required to populate complexity fields; existing indexes load and operate correctly with complexity = 0.
+
 ## [1.15.3] - 2026-04-01
 
 ### Added
