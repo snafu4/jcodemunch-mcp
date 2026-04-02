@@ -4,6 +4,14 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-04-02
+
+### Changed
+- **Lazy tool imports** — all 45 tool module imports in `server.py` are now deferred to the first `call_tool()` dispatch for each tool. Previously, importing `server.py` loaded every tool module (and their transitive dependencies: tree-sitter, httpx, pathspec, subprocess wrappers) regardless of which tools the session actually uses. Now only 7 tool modules load at startup (via the watcher's `index_folder` chain). Tools not called in a session are never imported. This reduces cold-start overhead for query-only sessions that never trigger indexing.
+- **`_build_tools_list()` helper** — `list_tools()` now delegates to a named `_build_tools_list()` function, making the tool list construction easier to test and reason about independently of the MCP decorator.
+- **Test patch targets updated** — tests that previously patched `jcodemunch_mcp.server.xxx` (where `xxx` is a tool function) now correctly patch `jcodemunch_mcp.tools.xxx_module.xxx_func`, which is where the name is looked up during dispatch. This follows Python's `unittest.mock.patch` best practice: patch where the name is looked up, not where it is defined.
+- **No API or output schema changes.** Zero new tools, zero removed tools, zero field changes.
+
 ## [1.19.0] - 2026-04-01
 
 ### Added

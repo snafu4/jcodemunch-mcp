@@ -113,7 +113,7 @@ async def test_get_file_content_tool_schema():
 @pytest.mark.asyncio
 async def test_call_tool_defaults_index_repo_incremental_true():
     """Omitted MCP args should preserve the tool's incremental default."""
-    with patch("jcodemunch_mcp.server.index_repo", new=AsyncMock(return_value={"success": True})) as mock_index_repo:
+    with patch("jcodemunch_mcp.tools.index_repo.index_repo", new=AsyncMock(return_value={"success": True})) as mock_index_repo:
         await call_tool("index_repo", {"url": "owner/repo"})
 
     mock_index_repo.assert_awaited_once_with(
@@ -128,7 +128,7 @@ async def test_call_tool_defaults_index_repo_incremental_true():
 @pytest.mark.asyncio
 async def test_call_tool_defaults_index_folder_incremental_true():
     """Local folder tool should also default incremental indexing to True."""
-    with patch("jcodemunch_mcp.server.index_folder", return_value={"success": True}) as mock_index_folder:
+    with patch("jcodemunch_mcp.tools.index_folder.index_folder", return_value={"success": True}) as mock_index_folder:
         await call_tool("index_folder", {"path": "/tmp/project"})
 
     mock_index_folder.assert_called_once_with(
@@ -144,7 +144,7 @@ async def test_call_tool_defaults_index_folder_incremental_true():
 @pytest.mark.asyncio
 async def test_call_tool_forwards_search_text_context_lines():
     """Dispatcher should pass through grouped search options unchanged."""
-    with patch("jcodemunch_mcp.server.search_text", return_value={"result_count": 1}) as mock_search_text:
+    with patch("jcodemunch_mcp.tools.search_text.search_text", return_value={"result_count": 1}) as mock_search_text:
         await call_tool("search_text", {"repo": "owner/repo", "query": "TODO", "context_lines": 3})
 
     mock_search_text.assert_called_once_with(
@@ -171,7 +171,7 @@ async def test_index_folder_dispatched_via_to_thread():
         thread_used.append(threading.current_thread())
         return {"success": True}
 
-    with patch("jcodemunch_mcp.server.index_folder", recording_index_folder):
+    with patch("jcodemunch_mcp.tools.index_folder.index_folder", recording_index_folder):
         await call_tool("index_folder", {"path": "/tmp/project"})
 
     assert thread_used, "index_folder was never called"
@@ -183,7 +183,7 @@ async def test_index_folder_dispatched_via_to_thread():
 @pytest.mark.asyncio
 async def test_call_tool_forwards_get_file_content_bounds():
     """Dispatcher should route file-content lookups with optional bounds."""
-    with patch("jcodemunch_mcp.server.get_file_content", return_value={"file": "src/main.py"}) as mock_get_file_content:
+    with patch("jcodemunch_mcp.tools.get_file_content.get_file_content", return_value={"file": "src/main.py"}) as mock_get_file_content:
         await call_tool(
             "get_file_content",
             {"repo": "owner/repo", "file_path": "src/main.py", "start_line": 5, "end_line": 8},
@@ -329,7 +329,7 @@ def test_coerce_mixed_types_in_single_call():
 @pytest.mark.asyncio
 async def test_call_tool_coerces_string_boolean_to_true():
     """call_tool coerces string 'true' to boolean True before dispatching."""
-    with patch("jcodemunch_mcp.server.index_folder", return_value={"success": True}) as mock_index_folder:
+    with patch("jcodemunch_mcp.tools.index_folder.index_folder", return_value={"success": True}) as mock_index_folder:
         # "true" as a string — how Claude Code serialises booleans
         await call_tool("index_folder", {"path": "/tmp", "follow_symlinks": "true"})
 
@@ -341,7 +341,7 @@ async def test_call_tool_coerces_string_boolean_to_true():
 @pytest.mark.asyncio
 async def test_call_tool_coerces_string_boolean_to_false():
     """call_tool coerces string 'false' to boolean False before dispatching."""
-    with patch("jcodemunch_mcp.server.index_folder", return_value={"success": True}) as mock_index_folder:
+    with patch("jcodemunch_mcp.tools.index_folder.index_folder", return_value={"success": True}) as mock_index_folder:
         await call_tool("index_folder", {"path": "/tmp", "incremental": "false"})
 
     mock_index_folder.assert_called_once()
@@ -352,7 +352,7 @@ async def test_call_tool_coerces_string_boolean_to_false():
 @pytest.mark.asyncio
 async def test_call_tool_coerces_string_integer():
     """call_tool coerces string integers to int before dispatching."""
-    with patch("jcodemunch_mcp.server.search_symbols", return_value={}) as mock_search:
+    with patch("jcodemunch_mcp.tools.search_symbols.search_symbols", return_value={}) as mock_search:
         await call_tool(
             "search_symbols",
             {"repo": "owner/repo", "query": "foo", "max_results": "20"},
@@ -394,7 +394,7 @@ async def test_call_tool_uses_our_schema_cache_not_sdk():
     """call_tool uses _ensure_tool_schemas, not the private SDK method."""
     with patch("jcodemunch_mcp.server._ensure_tool_schemas") as mock_ensure:
         mock_ensure.return_value = {"index_folder": {"properties": {"path": {"type": "string"}}}}
-        with patch("jcodemunch_mcp.server.index_folder", return_value={"success": True}):
+        with patch("jcodemunch_mcp.tools.index_folder.index_folder", return_value={"success": True}):
             await call_tool("index_folder", {"path": "/tmp"})
 
     mock_ensure.assert_called_once()
@@ -528,7 +528,7 @@ async def test_meta_fields_empty_list_removes_meta_envelope():
 
     try:
         config_module._GLOBAL_CONFIG["meta_fields"] = []
-        with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": []}):
+        with patch("jcodemunch_mcp.tools.list_repos.list_repos", return_value={"repos": []}):
             result = await call_tool("list_repos", {})
         payload = json.loads(result[0].text)
         assert "_meta" not in payload
@@ -689,7 +689,7 @@ async def test_meta_fields_null_keeps_meta_envelope():
 
     try:
         config_module._GLOBAL_CONFIG["meta_fields"] = None
-        with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": [], "_meta": {"timing_ms": 1.0}}):
+        with patch("jcodemunch_mcp.tools.list_repos.list_repos", return_value={"repos": [], "_meta": {"timing_ms": 1.0}}):
             result = await call_tool("list_repos", {})
         payload = json.loads(result[0].text)
         assert "_meta" in payload
@@ -709,7 +709,7 @@ async def test_meta_fields_empty_list_removes_meta():
 
     try:
         config_module._GLOBAL_CONFIG["meta_fields"] = []
-        with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": [], "_meta": {"timing_ms": 5.0}}):
+        with patch("jcodemunch_mcp.tools.list_repos.list_repos", return_value={"repos": [], "_meta": {"timing_ms": 5.0}}):
             result = await call_tool("list_repos", {})
         payload = json.loads(result[0].text)
         assert "_meta" not in payload
@@ -862,12 +862,12 @@ async def test_descriptions_flat_string_overrides_tool_description():
 @pytest.mark.asyncio
 async def test_meta_fields_partial_list_preserves_tool_fields():
     """Partial meta_fields list preserves tool-generated fields like timing_ms (E1)."""
+    import jcodemunch_mcp.tools.list_repos as list_repos_module
     import jcodemunch_mcp.server as server_module
     from jcodemunch_mcp import config as config_module
-    import functools
 
     orig_config = config_module._GLOBAL_CONFIG.copy()
-    orig_list_repos = server_module.list_repos
+    orig_list_repos = list_repos_module.list_repos
 
     def fake_list_repos(storage_path=None):
         return {"repos": [], "_meta": {
@@ -881,9 +881,8 @@ async def test_meta_fields_partial_list_preserves_tool_fields():
         config_module._GLOBAL_CONFIG["meta_fields"] = ["timing_ms"]
         config_module._GLOBAL_CONFIG["disabled_tools"] = []
 
-        # Patch at the functools.partial level by replacing the module-level name
-        # and clearing the _TOOL_SCHEMAS cache so schemas are rebuilt
-        server_module.list_repos = fake_list_repos
+        # Patch at the tool module level (tools are now lazily imported in dispatch)
+        list_repos_module.list_repos = fake_list_repos
         # Clear the tool schemas cache so call_tool picks up the patched function
         server_module._TOOL_SCHEMAS = None
 
@@ -898,7 +897,7 @@ async def test_meta_fields_partial_list_preserves_tool_fields():
         # candidates_scored should NOT be in _meta (not in partial list)
         assert "candidates_scored" not in payload["_meta"]
     finally:
-        server_module.list_repos = orig_list_repos
+        list_repos_module.list_repos = orig_list_repos
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)
 

@@ -17,51 +17,10 @@ from mcp.types import Tool, TextContent, Resource
 
 from . import __version__
 from . import config as config_module
-from .tools.index_repo import index_repo
-from .tools.index_folder import index_folder
-from .tools.index_file import index_file
-from .tools.summarize_repo import summarize_repo
-from .tools.list_repos import list_repos
-from .tools.resolve_repo import resolve_repo
-from .tools.get_file_tree import get_file_tree
-from .tools.get_file_outline import get_file_outline
-from .tools.get_file_content import get_file_content
-from .tools.get_symbol import get_symbol_source
-from .tools.search_symbols import search_symbols
-from .tools.invalidate_cache import invalidate_cache
-from .tools.search_text import search_text
-from .tools.get_repo_outline import get_repo_outline
-from .tools.find_importers import find_importers
-from .tools.find_references import find_references
-from .tools.check_references import check_references
-from .tools.get_session_stats import get_session_stats
-from .tools.test_summarizer import test_summarizer
-from .tools.get_dependency_graph import get_dependency_graph
-from .tools.get_blast_radius import get_blast_radius
-from .tools.get_dependency_cycles import get_dependency_cycles
-from .tools.get_coupling_metrics import get_coupling_metrics
-from .tools.get_layer_violations import get_layer_violations
-from .tools.get_call_hierarchy import get_call_hierarchy
-from .tools.get_impact_preview import get_impact_preview
-from .tools.check_rename_safe import check_rename_safe
-from .tools.get_dead_code_v2 import get_dead_code_v2
-from .tools.get_extraction_candidates import get_extraction_candidates
-from .tools.get_symbol_complexity import get_symbol_complexity
-from .tools.get_churn_rate import get_churn_rate
-from .tools.get_hotspots import get_hotspots
-from .tools.get_repo_health import get_repo_health
-from .tools.get_symbol_diff import get_symbol_diff
-from .tools.get_class_hierarchy import get_class_hierarchy
-from .tools.get_related_symbols import get_related_symbols
-from .tools.get_symbol_importance import get_symbol_importance
-from .tools.find_dead_code import find_dead_code
-from .tools.get_changed_symbols import get_changed_symbols
-from .tools.suggest_queries import suggest_queries
-from .tools.search_columns import search_columns
-from .tools.get_context_bundle import get_context_bundle
-from .tools.get_ranked_context import get_ranked_context
-from .tools.embed_repo import embed_repo
-from .tools.get_cross_repo_map import get_cross_repo_map
+# Tool modules are imported lazily inside each call_tool() dispatch branch.
+# This defers loading heavy dependencies (tree-sitter, httpx, pathspec) until
+# the first actual call to a tool that needs them, reducing cold-start latency
+# for sessions that only use query tools and never trigger indexing.
 from .parser.symbols import VALID_KINDS
 from .summarizer import get_provider_name
 from .reindex_state import await_freshness_if_strict
@@ -199,6 +158,11 @@ server = Server("jcodemunch-mcp")
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available tools."""
+    return _build_tools_list()
+
+
+def _build_tools_list() -> list[Tool]:
+    """Build the full tool list, applying config-driven filtering and overrides."""
     tools = [
         Tool(
             name="index_repo",
@@ -1520,6 +1484,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             }, indent=2))]
 
         if name == "index_repo":
+            from .tools.index_repo import index_repo
             result = await index_repo(
                 url=arguments["url"],
                 use_ai_summaries=arguments.get("use_ai_summaries", _default_use_ai_summaries()),
@@ -1529,6 +1494,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
             _result_cache_invalidate()
         elif name == "index_folder":
+            from .tools.index_folder import index_folder
             _ai = arguments.get("use_ai_summaries", _default_use_ai_summaries())
             result = await asyncio.to_thread(
                 functools.partial(
@@ -1543,6 +1509,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
             _result_cache_invalidate()
         elif name == "summarize_repo":
+            from .tools.summarize_repo import summarize_repo
             result = await asyncio.to_thread(
                 functools.partial(
                     summarize_repo,
@@ -1552,6 +1519,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "index_file":
+            from .tools.index_file import index_file
             _ai = arguments.get("use_ai_summaries", _default_use_ai_summaries())
             result = await asyncio.to_thread(
                 functools.partial(
@@ -1564,10 +1532,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
             _result_cache_invalidate()
         elif name == "list_repos":
+            from .tools.list_repos import list_repos
             result = await asyncio.to_thread(
                 functools.partial(list_repos, storage_path=storage_path)
             )
         elif name == "resolve_repo":
+            from .tools.resolve_repo import resolve_repo
             result = await asyncio.to_thread(
                 functools.partial(
                     resolve_repo,
@@ -1576,6 +1546,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_file_tree":
+            from .tools.get_file_tree import get_file_tree
             result = await asyncio.to_thread(
                 functools.partial(
                     get_file_tree,
@@ -1587,6 +1558,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_file_outline":
+            from .tools.get_file_outline import get_file_outline
             result = await asyncio.to_thread(
                 functools.partial(
                     get_file_outline,
@@ -1597,6 +1569,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_file_content":
+            from .tools.get_file_content import get_file_content
             result = await asyncio.to_thread(
                 functools.partial(
                     get_file_content,
@@ -1608,6 +1581,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_symbol_source":
+            from .tools.get_symbol import get_symbol_source
             result = await asyncio.to_thread(
                 functools.partial(
                     get_symbol_source,
@@ -1620,6 +1594,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "search_symbols":
+            from .tools.search_symbols import search_symbols
             kind_filter = arguments.get("kind")
             if kind_filter and kind_filter not in VALID_KINDS:
                 result = {"error": f"Unknown kind '{kind_filter}'. Valid values: {sorted(VALID_KINDS)}"}
@@ -1647,6 +1622,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     )
                 )
         elif name == "invalidate_cache":
+            from .tools.invalidate_cache import invalidate_cache
             result = await asyncio.to_thread(
                 functools.partial(
                     invalidate_cache,
@@ -1656,6 +1632,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
             _result_cache_invalidate()
         elif name == "search_text":
+            from .tools.search_text import search_text
             result = await asyncio.to_thread(
                 functools.partial(
                     search_text,
@@ -1669,6 +1646,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_repo_outline":
+            from .tools.get_repo_outline import get_repo_outline
             result = await asyncio.to_thread(
                 functools.partial(
                     get_repo_outline,
@@ -1677,6 +1655,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "find_importers":
+            from .tools.find_importers import find_importers
             result = await asyncio.to_thread(
                 functools.partial(
                     find_importers,
@@ -1689,6 +1668,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "find_references":
+            from .tools.find_references import find_references
             result = await asyncio.to_thread(
                 functools.partial(
                     find_references,
@@ -1701,6 +1681,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "check_references":
+            from .tools.check_references import check_references
             result = await asyncio.to_thread(
                 functools.partial(
                     check_references,
@@ -1713,6 +1694,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "search_columns":
+            from .tools.search_columns import search_columns
             result = await asyncio.to_thread(
                 functools.partial(
                     search_columns,
@@ -1724,6 +1706,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_context_bundle":
+            from .tools.get_context_bundle import get_context_bundle
             result = await asyncio.to_thread(
                 functools.partial(
                     get_context_bundle,
@@ -1739,6 +1722,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_ranked_context":
+            from .tools.get_ranked_context import get_ranked_context
             result = await asyncio.to_thread(
                 functools.partial(
                     get_ranked_context,
@@ -1752,6 +1736,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_session_stats":
+            from .tools.get_session_stats import get_session_stats
             result = await asyncio.to_thread(
                 functools.partial(
                     get_session_stats,
@@ -1759,6 +1744,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "test_summarizer":
+            from .tools.test_summarizer import test_summarizer
             result = await asyncio.to_thread(
                 functools.partial(
                     test_summarizer,
@@ -1766,6 +1752,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_dependency_graph":
+            from .tools.get_dependency_graph import get_dependency_graph
             result = await asyncio.to_thread(
                 functools.partial(
                     get_dependency_graph,
@@ -1778,6 +1765,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_blast_radius":
+            from .tools.get_blast_radius import get_blast_radius
             result = await asyncio.to_thread(
                 functools.partial(
                     get_blast_radius,
@@ -1791,6 +1779,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_call_hierarchy":
+            from .tools.get_call_hierarchy import get_call_hierarchy
             result = await asyncio.to_thread(
                 functools.partial(
                     get_call_hierarchy,
@@ -1802,6 +1791,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_impact_preview":
+            from .tools.get_impact_preview import get_impact_preview
             result = await asyncio.to_thread(
                 functools.partial(
                     get_impact_preview,
@@ -1811,6 +1801,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_dependency_cycles":
+            from .tools.get_dependency_cycles import get_dependency_cycles
             result = await asyncio.to_thread(
                 functools.partial(
                     get_dependency_cycles,
@@ -1819,6 +1810,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_coupling_metrics":
+            from .tools.get_coupling_metrics import get_coupling_metrics
             result = await asyncio.to_thread(
                 functools.partial(
                     get_coupling_metrics,
@@ -1828,6 +1820,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_layer_violations":
+            from .tools.get_layer_violations import get_layer_violations
             result = await asyncio.to_thread(
                 functools.partial(
                     get_layer_violations,
@@ -1837,6 +1830,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "check_rename_safe":
+            from .tools.check_rename_safe import check_rename_safe
             result = await asyncio.to_thread(
                 functools.partial(
                     check_rename_safe,
@@ -1847,6 +1841,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_dead_code_v2":
+            from .tools.get_dead_code_v2 import get_dead_code_v2
             result = await asyncio.to_thread(
                 functools.partial(
                     get_dead_code_v2,
@@ -1857,6 +1852,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_extraction_candidates":
+            from .tools.get_extraction_candidates import get_extraction_candidates
             result = await asyncio.to_thread(
                 functools.partial(
                     get_extraction_candidates,
@@ -1868,6 +1864,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_symbol_complexity":
+            from .tools.get_symbol_complexity import get_symbol_complexity
             result = await asyncio.to_thread(
                 functools.partial(
                     get_symbol_complexity,
@@ -1877,6 +1874,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_churn_rate":
+            from .tools.get_churn_rate import get_churn_rate
             result = await asyncio.to_thread(
                 functools.partial(
                     get_churn_rate,
@@ -1887,6 +1885,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_hotspots":
+            from .tools.get_hotspots import get_hotspots
             result = await asyncio.to_thread(
                 functools.partial(
                     get_hotspots,
@@ -1898,6 +1897,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_repo_health":
+            from .tools.get_repo_health import get_repo_health
             result = await asyncio.to_thread(
                 functools.partial(
                     get_repo_health,
@@ -1907,6 +1907,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_symbol_diff":
+            from .tools.get_symbol_diff import get_symbol_diff
             result = await asyncio.to_thread(
                 functools.partial(
                     get_symbol_diff,
@@ -1916,6 +1917,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_class_hierarchy":
+            from .tools.get_class_hierarchy import get_class_hierarchy
             result = await asyncio.to_thread(
                 functools.partial(
                     get_class_hierarchy,
@@ -1925,6 +1927,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_related_symbols":
+            from .tools.get_related_symbols import get_related_symbols
             result = await asyncio.to_thread(
                 functools.partial(
                     get_related_symbols,
@@ -1935,6 +1938,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "suggest_queries":
+            from .tools.suggest_queries import suggest_queries
             result = await asyncio.to_thread(
                 functools.partial(
                     suggest_queries,
@@ -1943,6 +1947,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_symbol_importance":
+            from .tools.get_symbol_importance import get_symbol_importance
             result = await asyncio.to_thread(
                 functools.partial(
                     get_symbol_importance,
@@ -1954,6 +1959,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "find_dead_code":
+            from .tools.find_dead_code import find_dead_code
             result = await asyncio.to_thread(
                 functools.partial(
                     find_dead_code,
@@ -1966,6 +1972,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_changed_symbols":
+            from .tools.get_changed_symbols import get_changed_symbols
             result = await asyncio.to_thread(
                 functools.partial(
                     get_changed_symbols,
@@ -1978,6 +1985,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "embed_repo":
+            from .tools.embed_repo import embed_repo
             result = await asyncio.to_thread(
                 functools.partial(
                     embed_repo,
@@ -1988,6 +1996,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 )
             )
         elif name == "get_cross_repo_map":
+            from .tools.get_cross_repo_map import get_cross_repo_map
             result = await asyncio.to_thread(
                 functools.partial(
                     get_cross_repo_map,
