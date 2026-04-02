@@ -1095,7 +1095,11 @@ class SQLiteIndexStore:
         # v5: read directly from columns. Fallback to data JSON for mid-migration rows.
         if row["data"]:
             # Legacy v4 row (data not yet migrated) — parse JSON
-            data = json.loads(row["data"])
+            try:
+                data = json.loads(row["data"])
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("Corrupted JSON in symbol data column for row %s, skipping legacy fields", row["name"])
+                data = {}
             qualified_name = data.get("qualified_name", row["name"])
             language = data.get("language", "")
             decorators = data.get("decorators", [])
@@ -1107,9 +1111,17 @@ class SQLiteIndexStore:
             qualified_name = row["qualified_name"] or row["name"]
             language = row["language"] or ""
             deco_raw = row["decorators"]
-            decorators = json.loads(deco_raw) if deco_raw and deco_raw != "[]" else []
+            try:
+                decorators = json.loads(deco_raw) if deco_raw and deco_raw != "[]" else []
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("Corrupted decorators JSON for symbol %s", row["name"])
+                decorators = []
             kw_raw = row["keywords"]
-            keywords = json.loads(kw_raw) if kw_raw and kw_raw != "[]" else []
+            try:
+                keywords = json.loads(kw_raw) if kw_raw and kw_raw != "[]" else []
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("Corrupted keywords JSON for symbol %s", row["name"])
+                keywords = []
             content_hash = row["content_hash"] or ""
             ecosystem_context = row["ecosystem_context"] or ""
         return {
@@ -1294,17 +1306,28 @@ class SQLiteIndexStore:
             if size is not None:
                 file_sizes[p] = size
             if r["imports"]:
-                parsed = json.loads(r["imports"])
-                if parsed:
-                    imports[p] = parsed
+                try:
+                    parsed = json.loads(r["imports"])
+                    if parsed:
+                        imports[p] = parsed
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning("Corrupted imports JSON for file %s, skipping", p)
         source_files = sorted(source_files_unsorted)
         if not imports:
             # v3 format had no imports field — preserve None for backward compatibility
             index_version = int(meta.get("index_version", "0"))
             imports = None if index_version < 4 else {}
 
-        languages = json.loads(meta.get("languages", "{}"))
-        context_metadata = json.loads(meta.get("context_metadata", "{}"))
+        try:
+            languages = json.loads(meta.get("languages", "{}"))
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Corrupted languages JSON in metadata, defaulting to empty")
+            languages = {}
+        try:
+            context_metadata = json.loads(meta.get("context_metadata", "{}"))
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Corrupted context_metadata JSON in metadata, defaulting to empty")
+            context_metadata = {}
         package_names_raw = meta.get("package_names", "[]")
         try:
             package_names = json.loads(package_names_raw) if package_names_raw else []
