@@ -550,6 +550,8 @@ Merge into `~/.claude/settings.json`:
 ```
 
 > `WorktreeCreate`/`WorktreeRemove` are only needed if you use `watch-claude`. Skip them if not.
+>
+> **Shortcut:** `jcodemunch-mcp init --hooks` automatically merges the `WorktreeCreate`/`WorktreeRemove` entries into your `settings.json`.
 
 > [!IMPORTANT]
 > **Reopen Claude Code** after every change to `~/.claude/settings.json`. Hooks are loaded at startup — a running session will not pick up changes until the app is restarted.

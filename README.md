@@ -211,13 +211,30 @@ So when the agent wants a symbol, jCodeMunch can fetch the exact source directly
 
 ## Start fast
 
-### 1. Install it
+### Option A: One command (recommended)
+
+```bash
+pip install jcodemunch-mcp
+jcodemunch-mcp init
+```
+
+`init` auto-detects your MCP clients (Claude Code, Claude Desktop, Cursor, Windsurf, Continue), writes their config entries, installs the CLAUDE.md prompt policy so your agent actually uses jCodeMunch, and optionally indexes your project. Run `jcodemunch-mcp init --help` for all flags.
+
+For non-interactive CI or scripting:
+
+```bash
+jcodemunch-mcp init --yes --claude-md global --index
+```
+
+### Option B: Manual setup
+
+#### 1. Install it
 
 ```bash
 pip install jcodemunch-mcp
 ```
 
-### 2. Add it to your MCP client
+#### 2. Add it to your MCP client
 
 If you’re using Claude Code:
 
@@ -246,7 +263,7 @@ If you’re using **Paperclip** (the multi-agent orchestration platform), add a 
 
 Paperclip’s Claude Code agents auto-detect `.mcp.json` at startup. Add both servers to give your agents symbol search + doc navigation without blowing the token budget.
 
-### 3. Tell your agent to actually use it
+#### 3. Tell your agent to actually use it
 
 This matters more than people think.
 
@@ -258,7 +275,7 @@ A simple instruction like this helps:
 Use jcodemunch-mcp for code lookup whenever available. Prefer symbol search, outlines, and targeted retrieval over reading full files.
 ```
 
-> **Note:** For a comprehensive guide on enforcing these rules through agent hooks and prompt policies, see [AGENT_HOOKS.md](AGENT_HOOKS.md).
+> **Note:** `jcodemunch-mcp init` handles steps 2 and 3 automatically. For a comprehensive guide on enforcing these rules through agent hooks and prompt policies, see [AGENT_HOOKS.md](AGENT_HOOKS.md).
 
 ---
 

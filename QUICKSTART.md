@@ -1,22 +1,50 @@
 # jCodeMunch Quick Start
 
-Get from zero to 95% token savings in three steps.
+Get from zero to 95% token savings in one command.
 
 ---
 
-## Step 1 — Install
+## The fast way (recommended)
+
+```bash
+pip install jcodemunch-mcp
+jcodemunch-mcp init
+```
+
+`init` walks you through everything interactively:
+
+1. **Detects your MCP clients** (Claude Code, Claude Desktop, Cursor, Windsurf, Continue) and writes the config entry for each
+2. **Installs the CLAUDE.md prompt policy** so your agent actually uses jCodeMunch instead of brute-reading files
+3. **Optionally installs worktree hooks** for automatic Claude Code worktree indexing
+4. **Optionally indexes your current project**
+
+For non-interactive setups (CI, scripts, dotfiles):
+
+```bash
+jcodemunch-mcp init --yes --claude-md global --hooks --index
+```
+
+Run `jcodemunch-mcp init --dry-run` to preview what it would do without changing anything.
+
+After `init` completes, restart your MCP client(s). Confirm with `/mcp` in Claude Code — you should see `jcodemunch` listed as connected.
+
+> **Recommended:** use `uvx` instead of `pip install`. It resolves the package on demand and avoids PATH issues where MCP clients can't find the executable.
+
+---
+
+## The manual way
+
+If you prefer to set things up yourself, follow these three steps.
+
+### Step 1 — Install
 
 ```bash
 pip install jcodemunch-mcp
 ```
 
-> **Recommended alternative:** use `uvx` instead of `pip install`. It resolves the package on demand and avoids PATH issues where MCP clients can't find the executable.
+### Step 2 — Add to your MCP client
 
----
-
-## Step 2 — Add to your MCP client
-
-### Claude Code (one command)
+#### Claude Code (one command)
 
 ```bash
 claude mcp add jcodemunch uvx jcodemunch-mcp
@@ -24,7 +52,7 @@ claude mcp add jcodemunch uvx jcodemunch-mcp
 
 Restart Claude Code. Confirm with `/mcp` — you should see `jcodemunch` listed as connected.
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit the config file for your OS:
 
@@ -49,13 +77,11 @@ Add the `jcodemunch` entry:
 
 Restart Claude Desktop.
 
-### Other clients (Cursor, Windsurf, Roo, etc.)
+#### Other clients (Cursor, Windsurf, Roo, etc.)
 
 Any MCP-compatible client accepts the same JSON block above in its MCP config file.
 
----
-
-## Step 3 — Tell Claude to use it
+### Step 3 — Tell Claude to use it
 
 **This step is the most commonly missed.** Installing the server makes the tools
 *available* — but Claude defaults to its built-in file tools (Read, Grep, Glob) and
@@ -73,6 +99,9 @@ Always use jCodemunch-MCP tools — never fall back to Read, Grep, Glob, or Bash
 ```
 
 You can also add the same block to a project-level `CLAUDE.md` in your repo root.
+
+> [!TIP]
+> `jcodemunch-mcp init` handles steps 2 and 3 automatically.
 
 > [!IMPORTANT]
 > **CLAUDE.md is a soft rule.** It works well under normal conditions, but agents can ignore it when moving fast, under load, or deep in a complex task — not because they forgot, but because native tools feel faster in the moment. If you need reliable enforcement, install the [hook scripts](AGENT_HOOKS.md) — they intercept `Grep`, `Glob`, and `Bash` at the tool-call level and redirect Claude before the shortcut fires.

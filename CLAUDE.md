@@ -12,6 +12,8 @@ src/jcodemunch_mcp/
   server.py            # MCP dispatcher (async); CLI subcommand dispatch, auth/rate-limit middleware
   security.py          # Path validation, skip patterns, file caps
   config.py            # JSONC config: global + per-project layering, env var fallback, language/tool gating
+  cli/
+    init.py            # `jcodemunch-mcp init` — one-command onboarding (client detection, config patching, CLAUDE.md, hooks)
   parser/
     languages.py       # LANGUAGE_REGISTRY, extension → language map, LanguageSpec
     extractor.py       # parse_file() dispatch; custom parsers for Erlang, Fortran, SQL, Razor
@@ -47,6 +49,7 @@ src/jcodemunch_mcp/
 | Subcommand | Purpose |
 |------------|---------|
 | `serve` (default) | Run the MCP server (`stdio`, `sse`, or `streamable-http`) |
+| `init` | One-command onboarding: detect MCP clients, write config, install CLAUDE.md policy, hooks, index |
 | `watch <paths>` | File watcher — auto-reindex on change |
 | `watch-claude` | Auto-discover and watch Claude Code worktrees |
 | `hook-event create\|remove` | Record a worktree lifecycle event (called by Claude Code hooks) |

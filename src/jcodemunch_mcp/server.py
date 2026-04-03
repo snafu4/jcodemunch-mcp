@@ -3147,6 +3147,53 @@ def main(argv: Optional[list[str]] = None):
     )
     _add_common_args(index_file_parser)
 
+    # --- init ---
+    init_parser = subparsers.add_parser(
+        "init",
+        help="One-command setup: register with MCP clients, install CLAUDE.md policy, hooks, and index",
+    )
+    init_parser.add_argument(
+        "--client",
+        nargs="*",
+        default=None,
+        metavar="CLIENT",
+        help="MCP clients to configure (auto, claude-code, claude-desktop, cursor, windsurf, continue, none)",
+    )
+    init_parser.add_argument(
+        "--claude-md",
+        choices=["global", "project"],
+        default=None,
+        dest="claude_md",
+        help="Install Code Exploration Policy to CLAUDE.md (global = ~/.claude/CLAUDE.md, project = ./CLAUDE.md)",
+    )
+    init_parser.add_argument(
+        "--hooks",
+        action="store_true",
+        help="Install worktree lifecycle hooks into ~/.claude/settings.json",
+    )
+    init_parser.add_argument(
+        "--index",
+        action="store_true",
+        help="Index the current working directory after setup",
+    )
+    init_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Show what would be done without making changes",
+    )
+    init_parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Accept all defaults non-interactively",
+    )
+    init_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        dest="no_backup",
+        help="Skip creating .bak backups of modified files",
+    )
+
     # --- hook-event ---
     hook_parser = subparsers.add_parser(
         "hook-event",
@@ -3208,7 +3255,7 @@ def main(argv: Optional[list[str]] = None):
     if any(arg in top_level_flags for arg in raw_argv):
         args = parser.parse_args(raw_argv)
     else:
-        known_commands = {"serve", "watch", "hook-event", "watch-claude", "config", "index-file", "claude-md"}
+        known_commands = {"serve", "watch", "hook-event", "watch-claude", "config", "index-file", "claude-md", "init"}
         has_subcommand = any(arg in known_commands for arg in raw_argv if not arg.startswith("-"))
         if not has_subcommand:
             raw_argv = ["serve"] + list(raw_argv)
@@ -3228,6 +3275,18 @@ def main(argv: Optional[list[str]] = None):
             fmt=getattr(args, "fmt", "full"),
         )
         return
+
+    if args.command == "init":
+        from .cli.init import run_init
+        sys.exit(run_init(
+            clients=args.client,
+            claude_md=args.claude_md,
+            hooks=args.hooks,
+            index=args.index,
+            dry_run=args.dry_run,
+            yes=args.yes,
+            no_backup=args.no_backup,
+        ))
 
     # Apply config defaults for watcher keys: CLI args > config > env vars.
     # config.load_config() is called inside each subcommand handler, but we need
