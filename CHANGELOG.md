@@ -4,8 +4,11 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.21.24] - 2026-04-03
+
 ### Added
 - **`jcodemunch-mcp init` subcommand** — one-command onboarding that auto-detects installed MCP clients (Claude Code, Claude Desktop, Cursor, Windsurf, Continue), writes their config entries, injects the Code Exploration Policy into CLAUDE.md, installs worktree lifecycle hooks, and optionally indexes the current directory. Supports `--dry-run`, `--yes` (non-interactive), `--client`, `--claude-md`, `--hooks`, `--index`, and `--no-backup` flags. 27 new tests in `test_init.py`.
+- Updated QUICKSTART.md, README.md, and AGENT_HOOKS.md to lead with `init` as the recommended setup path.
 
 ## [1.21.23] - 2026-04-02
 
