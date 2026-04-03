@@ -4,6 +4,16 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.21.14] - 2026-04-02
+
+### Fixed
+- **Threading locks added to all in-process caches (T5)** — four module-level caches were missing `threading.Lock` guards, leaving them vulnerable to data races under concurrent MCP requests (HTTP transport, multi-client stdio). Now protected:
+  - `_bare_name_cache` (`tools/_utils.py`) — new `_BARE_NAME_LOCK`; check and write are each under the lock; expensive `list_repos()` I/O happens between the two lock acquisitions so the lock is never held during I/O.
+  - `_REPO_PATH_CACHE` (`config.py`) — now protected by the existing `_CONFIG_LOCK`; reads (check) and bulk writes (`update`) are each atomic under the lock; store I/O happens outside.
+  - `_alias_map_cache` (`parser/imports.py`) — new `_ALIAS_MAP_LOCK`; same check-then-build-then-write pattern.
+  - `_sql_stem_cache` (`parser/imports.py`) — new `_SQL_STEM_LOCK`; same pattern.
+- **`invalidate_cache` now clears all 5 in-process caches under their locks (T4.5)** — previously `_sql_stem_cache` was not cleared on `invalidate_cache`, leaving stale SQL stem mappings across re-indexes. Also, `_REPO_PATH_CACHE.clear()` and `_PROJECT_CONFIGS.pop()` were called outside `_CONFIG_LOCK`. All five caches (`_REPO_PATH_CACHE`, `_PROJECT_CONFIGS`, `_PROJECT_CONFIG_HASHES`, `_bare_name_cache`, `_sql_stem_cache`, `_alias_map_cache`) are now cleared under their respective locks.
+
 ## [1.21.13] - 2026-04-02
 
 ### Fixed

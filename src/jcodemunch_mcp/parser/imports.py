@@ -3,6 +3,7 @@
 import json
 import posixpath
 import re
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -421,22 +422,28 @@ def resolve_php_namespace(
 # prevent id() aliasing after GC (C7-A).
 _sql_stem_cache: dict[frozenset, dict[str, str]] = {}
 _SQL_STEM_CACHE_MAX = 4
+_SQL_STEM_LOCK = threading.Lock()
 
 
 def _get_sql_stems(source_files: set[str]) -> dict[str, str]:
     """Return a lowered-stem -> file_path dict for .sql files, cached by content."""
     key = frozenset(f for f in source_files if f.endswith(".sql"))
-    cached = _sql_stem_cache.get(key)
-    if cached is not None:
-        return cached
+    with _SQL_STEM_LOCK:
+        cached = _sql_stem_cache.get(key)
+        if cached is not None:
+            return cached
+
+    # Miss: build without holding the lock
     stems: dict[str, str] = {}
     for sf in key:
         stem = posixpath.splitext(posixpath.basename(sf))[0].lower()
         if stem not in stems:  # first match wins
             stems[stem] = sf
-    if len(_sql_stem_cache) >= _SQL_STEM_CACHE_MAX:
-        _sql_stem_cache.pop(next(iter(_sql_stem_cache)))
-    _sql_stem_cache[key] = stems
+
+    with _SQL_STEM_LOCK:
+        if len(_sql_stem_cache) >= _SQL_STEM_CACHE_MAX:
+            _sql_stem_cache.pop(next(iter(_sql_stem_cache)))
+        _sql_stem_cache[key] = stems
     return stems
 
 
@@ -466,6 +473,7 @@ def _candidates(base: str) -> list[str]:
 # Module-level cache: source_root -> alias_map (no mtime invalidation — tsconfig rarely
 # changes during a session; a re-index is needed anyway if paths change).
 _alias_map_cache: dict[str, dict[str, list[str]]] = {}
+_ALIAS_MAP_LOCK = threading.Lock()
 
 
 def _norm_alias_replacement(rep: str, tsconfig_dir_rel: str = "") -> str:
@@ -507,9 +515,11 @@ def _load_tsconfig_aliases(source_root: str) -> dict[str, list[str]]:
     """
     if not source_root:
         return {}
-    if source_root in _alias_map_cache:
-        return _alias_map_cache[source_root]
+    with _ALIAS_MAP_LOCK:
+        if source_root in _alias_map_cache:
+            return _alias_map_cache[source_root]
 
+    # Miss: load tsconfig files without holding the lock (filesystem I/O)
     alias_map: dict[str, list[str]] = {}
     root = Path(source_root)
 
@@ -543,7 +553,8 @@ def _load_tsconfig_aliases(source_root: str) -> dict[str, list[str]]:
         data = _load_json(svelte_cfg)
         _ingest(data.get("compilerOptions", {}).get("paths", {}), tsconfig_dir_rel=".svelte-kit")
 
-    _alias_map_cache[source_root] = alias_map
+    with _ALIAS_MAP_LOCK:
+        _alias_map_cache[source_root] = alias_map
     return alias_map
 
 
