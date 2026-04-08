@@ -1,9 +1,9 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.23.5 (published to PyPI)
+- **Version:** 1.24.0 (published to PyPI)
 - **INDEX_VERSION:** 8
-- **Tests:** 2334 passed, 5 skipped
+- **Tests:** 2373 passed, 5 skipped
 - **Python:** >=3.10
 
 ## Key Files
@@ -12,6 +12,7 @@ src/jcodemunch_mcp/
   server.py            # MCP dispatcher (async); CLI subcommand dispatch, auth/rate-limit middleware
   security.py          # Path validation, skip patterns, file caps
   config.py            # JSONC config: global + per-project layering, env var fallback, language/tool gating
+  agent_selector.py    # Complexity scoring + model routing (off/manual/auto); default provider batting orders
   cli/
     init.py            # `jcodemunch-mcp init` — one-command onboarding (client detection, config patching, CLAUDE.md, Cursor rules, Windsurf rules, hooks); --demo flag
     hooks.py           # PreToolUse (Read interceptor) + PostToolUse (auto-reindex) + PreCompact (session snapshot) hook handlers for Claude Code

@@ -2,6 +2,17 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.24.0] — 2026-04-08
+
+### Added
+- **Agent Selector**: opt-in complexity-based model routing system that assesses request complexity using pre-processing signals and recommends (manual mode) or automatically selects (auto mode) the appropriate model tier (low/medium/high). Off by default — zero behavioral change for existing users
+  - `ComplexityScorer`: weighted linear scoring using retrieval set size, symbol count, cross-file references, cross-project flag, language complexity, and token estimate
+  - `ModelRouter`: three modes — `off` (default), `manual` (advisory prompts on step-up; `verbosePrompts` for step-down), `auto` (automatic routing with metadata annotation)
+  - Default batting orders for Anthropic, OpenAI, and Google providers; fully customizable via `agentSelector` config block
+  - Session-level init param overrides (`agentSelector.mode`, `agentSelector.activeProvider`, `agentSelector.verbosePrompts`)
+  - Tier resolution edge cases: missing tier fallback, single-model provider passthrough, unknown provider graceful degradation
+  - 39 new tests covering scorer, router, config, tier resolution, and language classification
+
 ## [1.23.5] — 2026-04-08
 
 ### Changed

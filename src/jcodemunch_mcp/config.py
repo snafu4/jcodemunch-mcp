@@ -310,6 +310,8 @@ DEFAULTS = {
     "session_resume": False,
     "session_max_age_minutes": 30,
     "session_max_queries": 50,
+    # Agent Selector
+    "agent_selector": {},
 }
 
 CONFIG_TYPES = {
@@ -374,6 +376,7 @@ CONFIG_TYPES = {
     "session_resume": bool,
     "session_max_age_minutes": int,
     "session_max_queries": int,
+    "agent_selector": dict,
 }
 
 

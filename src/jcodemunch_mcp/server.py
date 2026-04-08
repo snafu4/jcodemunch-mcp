@@ -68,6 +68,13 @@ _CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "audit_agent_config",
 )
 
+# Tools eligible for Agent Selector complexity scoring
+_AGENT_SELECTOR_TOOLS = frozenset({
+    "get_ranked_context", "get_context_bundle", "search_symbols",
+    "search_text", "get_symbol_source", "plan_turn",
+    "get_blast_radius", "get_impact_preview", "get_dependency_graph",
+})
+
 # Tools excluded from strict freshness mode (don't wait for reindex)
 _EXCLUDED_FROM_STRICT = frozenset({
     "list_repos",
@@ -2510,6 +2517,41 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 tb.record_output(len(json.dumps(result, default=str)) // 4)
         except Exception:
             logger.debug("Turn budget recording failed", exc_info=True)
+
+        # Agent Selector: score complexity and annotate result
+        try:
+            agent_selector_cfg = config_module.get("agent_selector", {})
+            if isinstance(agent_selector_cfg, dict) and agent_selector_cfg.get("mode", "off") != "off":
+                if isinstance(result, dict) and "error" not in result and name in _AGENT_SELECTOR_TOOLS:
+                    from .agent_selector import (
+                        AgentSelectorConfig, ComplexitySignals, score_complexity, route,
+                    )
+                    as_config = AgentSelectorConfig.from_config(agent_selector_cfg)
+                    # Build signals from result metadata
+                    signals = ComplexitySignals(
+                        retrievalSetSize=result.get("items_included", result.get("symbol_count", 0)),
+                        symbolCount=result.get("symbol_count", len(result.get("symbols", result.get("context_items", [])))),
+                        crossFileReferences=result.get("cross_file_refs", 0),
+                        crossProjectReferences=result.get("cross_project", False),
+                        languageComplexity=result.get("language_complexity", "standard"),
+                        requestTokenEstimate=result.get("used_tokens", result.get("total_tokens", 0)),
+                    )
+                    assessment = score_complexity(signals, as_config)
+                    current_model = arguments.get("_current_model")
+                    decision = route(assessment, as_config, current_model)
+                    # Annotate result
+                    meta = result.setdefault("_meta", {})
+                    meta["agent_selector"] = {
+                        "score": assessment.score,
+                        "tier": assessment.tier,
+                        "recommendedModel": assessment.recommendedModel,
+                    }
+                    if decision.prompt_text:
+                        result["agent_selector_prompt"] = decision.prompt_text
+                    if decision.metadata_text:
+                        result["agent_selector"] = decision.metadata_text
+        except Exception:
+            logger.debug("Agent selector scoring failed", exc_info=True)
 
         if isinstance(result, dict):
             meta_fields = config_module.get("meta_fields")
