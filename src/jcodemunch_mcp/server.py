@@ -2878,6 +2878,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             meta_fields = config_module.get("meta_fields")
             if meta_fields == [] or arguments.get("suppress_meta"):
                 result.pop("_meta", None)
+                # Also strip nested _meta from batch tools (e.g. get_file_outline batch)
+                for _item in result.get("results", []):
+                    if isinstance(_item, dict):
+                        _item.pop("_meta", None)
             elif isinstance(meta_fields, list):
                 # Partial field inclusion — keep only the fields listed in meta_fields,
                 # preserving tool-generated fields (timing_ms, tokens_saved, etc.)
@@ -2890,6 +2894,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         _meta[field] = existing_meta[field]
                 if _meta:
                     result["_meta"] = _meta
+                # Also filter nested _meta from batch tools (e.g. get_file_outline batch)
+                for _item in result.get("results", []):
+                    if isinstance(_item, dict):
+                        _item_meta = _item.pop("_meta", {})
+                        _item_filtered: dict[str, Any] = {f: _item_meta[f] for f in meta_fields if f in _item_meta}
+                        if "powered_by" in meta_fields:
+                            _item_filtered["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
+                        if _item_filtered:
+                            _item["_meta"] = _item_filtered
         # Per-call pulse for downstream consumers (dashboards, monitors)
         _saved = result.get("_meta", {}).get("tokens_saved", 0) if isinstance(result, dict) else 0
         _write_pulse(name, tokens_saved=_saved, base_path=storage_path)
@@ -2967,18 +2980,11 @@ async def _run_server_with_watcher(
 
     _watcher_manager = manager
 
-    # Create manager run task
+    # Create manager run task (self-restarts on crash)
     manager_task = asyncio.create_task(
         manager.run(),
         name="watcher-manager",
     )
-
-    # Give watcher a moment to start; detect early failures before blocking on server
-    await asyncio.sleep(0.1)
-    if manager_task.done() and not manager_task.cancelled():
-        exc = manager_task.exception()
-        if exc is not None:
-            logger.warning("Embedded watcher failed to start: %s", exc)
 
     try:
         await server_coro_func(*server_args)
@@ -4451,6 +4457,20 @@ def main(argv: Optional[list[str]] = None):
         # Re-run load_config() after _setup_logging() so config warnings/errors
         # go to the configured log destination (the early call at startup ran before logging was set up)
         config_module.load_config()
+
+        # Clean up orphan indexes whose source_root no longer exists
+        try:
+            from .storage import IndexStore
+
+            storage_path = os.environ.get("CODE_INDEX_PATH")
+            store = IndexStore(base_path=storage_path)
+            cleaned = store.cleanup_orphan_indexes()
+            store.close()
+            if cleaned:
+                logger.info("Cleaned up %d orphan index(es)", cleaned)
+        except Exception:
+            logger.debug("Orphan index cleanup failed", exc_info=True)
+
         config_module.load_all_project_configs()
         from .reindex_state import set_freshness_mode
         # Apply config default if --freshness-mode was not explicitly provided
