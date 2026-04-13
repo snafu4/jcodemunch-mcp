@@ -14,6 +14,8 @@ Quickstart - https://github.com/jgravelle/jcodemunch-mcp/blob/main/QUICKSTART.md
 | [QUICKSTART.md](QUICKSTART.md) | Zero-to-indexed in three steps |
 | [USER_GUIDE.md](USER_GUIDE.md) | Full tool reference, workflows, and best practices |
 | [AGENT_HOOKS.md](AGENT_HOOKS.md) | Agent hooks and prompt policies |
+| [CONFIGURATION.md](CONFIGURATION.md) | JSONC config file reference, migration from env vars |
+| [GROQ.md](GROQ.md) | Groq Remote MCP integration, deployment, gcm CLI |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Internal design, storage model, and extension points |
 | [LANGUAGE_SUPPORT.md](LANGUAGE_SUPPORT.md) | Supported languages and parsing details |
 | [CONTEXT_PROVIDERS.md](CONTEXT_PROVIDERS.md) | dbt, Git, and custom context provider docs |

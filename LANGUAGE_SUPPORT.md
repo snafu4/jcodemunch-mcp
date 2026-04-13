@@ -186,6 +186,6 @@ JCODEMUNCH_EXTRA_EXTENSIONS=".cgi:perl,.psgi:perl,.mjs:javascript"
 - Comma-separated `.ext:lang` pairs
 - Overrides built-in mappings on collision
 - Unknown languages and malformed entries are skipped with a warning
-- Valid language names: `python`, `javascript`, `typescript`, `tsx`, `go`, `rust`, `java`, `php`, `dart`, `csharp`, `c`, `cpp`, `swift`, `elixir`, `ruby`, `perl`, `gdscript`, `blade`, `kotlin`, `gleam`, `bash`, `nix`, `vue`, `ejs`, `verse`, `lua`, `luau`, `erlang`, `fortran`, `sql`, `scala`, `haskell`, `julia`, `r`, `css`, `scss`, `sass`, `less`, `styl`, `toml`, `groovy`, `objc`, `proto`, `hcl`, `graphql`, `autohotkey`, `asm`, `xml`, `yaml`, `ansible`, `json`, `openapi`, `al`
+- Valid language names: `ada`, `al`, `ansible`, `apex`, `arduino`, `asm`, `autohotkey`, `bash`, `blade`, `c`, `clojure`, `cobol`, `commonlisp`, `cpp`, `csharp`, `css`, `dart`, `dlang`, `ejs`, `elisp`, `elixir`, `erlang`, `fortran`, `fsharp`, `gdscript`, `gleam`, `go`, `graphql`, `groovy`, `haskell`, `hcl`, `java`, `javascript`, `json`, `julia`, `kotlin`, `less`, `lua`, `luau`, `matlab`, `nim`, `nix`, `objc`, `ocaml`, `openapi`, `pascal`, `perl`, `php`, `powershell`, `proto`, `python`, `r`, `razor`, `ruby`, `rust`, `sass`, `scala`, `scss`, `solidity`, `sql`, `styl`, `swift`, `tcl`, `toml`, `tsx`, `typescript`, `verilog`, `verse`, `vhdl`, `vue`, `xml`, `yaml`, `zig`
 
 Set via `.mcp.json` `env` block or any environment mechanism supported by your MCP client.
