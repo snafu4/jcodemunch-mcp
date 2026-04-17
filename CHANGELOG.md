@@ -2,6 +2,11 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.58.0] — 2026-04-17
+
+### Added
+- **MUNCH TypeScript decoder + agent hints (phase 5)** — reference TS decoder at `clients/ts/decoder.ts` (zero dependencies, ~200 lines) decodes both tier-1 and generic-fallback MUNCH payloads to plain JS objects; falls through to `JSON.parse` for non-MUNCH input. New `AGENT_HINTS.md` ships a drop-in prompt snippet so agents can read MUNCH payloads directly without a client-side decoder, plus a worked example walking through legend handles, scalar quoting, and table rehydration. Closes phase 5 of the MUNCH rollout — clients that cannot or will not decode MUNCH can still request `format="json"` to opt out per call or set `JCODEMUNCH_DEFAULT_FORMAT=json` to disable globally.
+
 ## [1.57.0] — 2026-04-17
 
 ### Added
