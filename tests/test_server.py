@@ -21,7 +21,7 @@ async def test_server_lists_all_tools():
     try:
         tools = await list_tools()
 
-        assert len(tools) == 59
+        assert len(tools) == 61  # 59 + set_tool_tier + announce_model
 
         names = {t.name for t in tools}
         expected = {
@@ -45,6 +45,7 @@ async def test_server_lists_all_tools():
             "get_project_intel",
             "get_symbol_provenance", "get_pr_risk_profile",
             "winnow_symbols",
+            "set_tool_tier", "announce_model",
         }
         assert names == expected
         assert "test_summarizer" not in names  # disabled by default in DEFAULTS
@@ -663,8 +664,9 @@ async def test_disabled_tools_filtered_from_schema(monkeypatch):
         assert "index_repo" not in tool_names
         assert "search_columns" not in tool_names
         assert "get_file_tree" in tool_names  # Not disabled
-        # 59 default tools + test_summarizer (config cleared) - 2 disabled = 58
-        assert len(tools) == 58
+        # 61 default tools (59 + 2 runtime) + test_summarizer (config cleared) - 2 disabled = 60
+        # But set_tool_tier + announce_model are force-included even when disabled
+        assert len(tools) == 60
     finally:
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)
@@ -682,7 +684,7 @@ async def test_disabled_tools_empty_all_tools_present(monkeypatch):
         config_module._GLOBAL_CONFIG["disabled_tools"] = []
 
         tools = await list_tools()
-        assert len(tools) == 60
+        assert len(tools) == 62  # 60 + set_tool_tier + announce_model
     finally:
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)

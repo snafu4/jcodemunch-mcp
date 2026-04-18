@@ -266,3 +266,92 @@ async def test_switch_tools_not_filterable_by_disabled():
     finally:
         config_mod._GLOBAL_CONFIG.clear()
         config_mod._GLOBAL_CONFIG.update(orig_config)
+
+
+# --------------------------------------------------------------------------- #
+# plan_turn(model=...) piggyback                                               #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_plan_turn_model_piggyback_switches_tier(adaptive_on):
+    """plan_turn(model=...) must flip the session tier as a side effect."""
+    from copy import deepcopy
+    from jcodemunch_mcp.server import call_tool
+    import json
+
+    orig_config = config_mod._GLOBAL_CONFIG.copy()
+    config_mod._GLOBAL_CONFIG.clear()
+    config_mod._GLOBAL_CONFIG.update(deepcopy(config_mod.DEFAULTS))
+    server_mod._session_tier_override = None
+
+    try:
+        args = {
+            "repo": "local/jcodemunch-mcp-384d867b",
+            "query": "anything",
+            "model": "claude-sonnet-4-6",
+        }
+        result = await call_tool("plan_turn", args)
+        text = result[0].text if hasattr(result[0], 'text') else result[0]
+        data = json.loads(text)
+        assert server_mod._session_tier_override == "standard"
+        ann = data.get("tier_announcement", {})
+        assert ann.get("tier") == "standard"
+    finally:
+        config_mod._GLOBAL_CONFIG.clear()
+        config_mod._GLOBAL_CONFIG.update(orig_config)
+        server_mod._session_tier_override = None
+
+
+@pytest.mark.asyncio
+async def test_plan_turn_without_model_leaves_tier_untouched(adaptive_on):
+    from copy import deepcopy
+    from jcodemunch_mcp.server import call_tool
+    import json
+
+    orig_config = config_mod._GLOBAL_CONFIG.copy()
+    config_mod._GLOBAL_CONFIG.clear()
+    config_mod._GLOBAL_CONFIG.update(deepcopy(config_mod.DEFAULTS))
+    server_mod._session_tier_override = "core"
+
+    try:
+        await call_tool(
+            "plan_turn",
+            {"repo": "local/jcodemunch-mcp-384d867b", "query": "anything"},
+        )
+        assert server_mod._session_tier_override == "core"
+    finally:
+        config_mod._GLOBAL_CONFIG.clear()
+        config_mod._GLOBAL_CONFIG.update(orig_config)
+        server_mod._session_tier_override = None
+
+
+@pytest.mark.asyncio
+async def test_plan_turn_model_noop_when_adaptive_tiering_disabled():
+    """With adaptive_tiering=false (default), plan_turn's model param is
+    accepted but the session tier is not switched."""
+    from copy import deepcopy
+    from jcodemunch_mcp.server import call_tool
+    import json
+
+    orig_config = config_mod._GLOBAL_CONFIG.copy()
+    config_mod._GLOBAL_CONFIG.clear()
+    config_mod._GLOBAL_CONFIG.update(deepcopy(config_mod.DEFAULTS))
+    server_mod._session_tier_override = None
+
+    try:
+        args = {
+            "repo": "local/jcodemunch-mcp-384d867b",
+            "query": "anything",
+            "model": "claude-haiku-4-5",
+        }
+        result = await call_tool("plan_turn", args)
+        text = result[0].text if hasattr(result[0], 'text') else result[0]
+        data = json.loads(text)
+        assert server_mod._session_tier_override is None
+        ann = data.get("tier_announcement", {})
+        assert ann.get("changed") is False
+        assert ann.get("adaptive_tiering") is False
+    finally:
+        config_mod._GLOBAL_CONFIG.clear()
+        config_mod._GLOBAL_CONFIG.update(orig_config)
+        server_mod._session_tier_override = None

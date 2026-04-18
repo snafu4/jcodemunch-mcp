@@ -1140,6 +1140,17 @@ def _build_tools_list() -> list[Tool]:
                         "description": "Maximum number of symbols to recommend.",
                         "default": 5,
                     },
+                    "model": {
+                        "type": "string",
+                        "description": (
+                            "Optional. Your active model identifier (e.g. 'claude-haiku-4-5'). "
+                            "When supplied and adaptive_tiering is enabled, plan_turn invokes "
+                            "the tier-switch logic as a side effect — the exposed tool list is "
+                            "narrowed to the tier mapped to this model via config.jsonc:"
+                            "model_tier_map. Prefer this form over calling announce_model "
+                            "separately — it adds zero extra requests."
+                        ),
+                    },
                 },
                 "required": ["repo", "query"],
             }
@@ -2999,6 +3010,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             )
         elif name == "plan_turn":
             from .tools.plan_turn import plan_turn
+            # Extract model for tier-switch piggyback before passing to plan_turn
+            model = arguments.pop("model", None) if isinstance(arguments, dict) else None
+            announcement = None
+            if isinstance(model, str) and model:
+                announcement = await _apply_model_announcement(model)
             result = await asyncio.to_thread(
                 functools.partial(
                     plan_turn,
@@ -3008,6 +3024,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     storage_path=storage_path,
                 )
             )
+            if announcement is not None and isinstance(result, dict):
+                result["tier_announcement"] = announcement
         elif name == "register_edit":
             from .tools.register_edit import register_edit
             result = await asyncio.to_thread(
