@@ -2,6 +2,18 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.59.1] — 2026-04-18
+
+### Fixed
+- **Redaction no longer mangles source code (F1)** — the `bearer_token` pattern was over-broad: `(?i)(?:bearer|token)\s+...` matched ordinary identifiers like `def refresh_token session_identifier_name`. Pattern is now header-anchored (`Authorization:` context or capital `Bearer `). The `generic_api_key` pattern now requires the captured value to include all three character classes (upper+lower+digit) AND meet a Shannon entropy threshold (≥3.5 bits/char), so SCREAMING_CASE and snake_case identifiers pass through unchanged.
+- **Redaction depth cap no longer leaks secrets (F2)** — past the 20-level recursion guard, `redact_dict` previously returned the raw subtree. Deeply nested payloads now collapse to `[REDACTED:depth_exceeded]` instead.
+- **`_meta` string fields now scanned for secrets (F6)** — the blanket `_meta` bypass in `redact_dict` skipped strings inside `_meta.hint` / `_meta.error`, letting secrets echoed into metadata leak unredacted. Only scalar numeric/bool fields bypass scanning now; strings and nested containers are redacted.
+- **`mermaid_viewer.open_diagram` contains filesystem errors (F4)** — `mkdir` and `write_text` failures previously propagated as exceptions, contradicting the docstring's "non-fatal on failure" contract. They now return `{opened: False, error: "write_failed: ..."}`.
+- **Per-call temp-file purge (F3)** — `open_diagram` now prunes `jcm-*.mmd` files older than one hour on every invocation, preventing unbounded growth under repeated use.
+
+### Security
+- **Viewer executable gate (F5)** — `resolve_viewer_path` now checks that the configured path looks executable (exec suffix on Windows; execute bit on POSIX). Stale config pointing at a non-executable file now returns `None` instead of attempting to spawn it.
+
 ## [1.59.0] — 2026-04-17
 
 ### Added

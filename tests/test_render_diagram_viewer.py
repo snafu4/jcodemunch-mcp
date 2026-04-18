@@ -9,6 +9,13 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+# Fake viewer paths below use a `.exe` suffix and patch os.access so the
+# executability gate in _looks_executable passes uniformly on Windows + POSIX.
+def _viewer_exec_patches():
+    """Return contextmanager patches that make any mocked path look executable."""
+    return patch("jcodemunch_mcp.tools.mermaid_viewer.os.access", return_value=True)
+
+
 # ── mermaid_viewer module tests ─────────────────────────────────────────────
 
 class TestResolveViewerPath:
@@ -19,9 +26,9 @@ class TestResolveViewerPath:
         import jcodemunch_mcp.tools.mermaid_viewer as mv
         import jcodemunch_mcp.config as config_module
         importlib.reload(mv)
-        fake_path = "/usr/local/bin/mmd-viewer"
+        fake_path = "/usr/local/bin/mmd-viewer.exe"
         with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_path if k == "mermaid_viewer_path" else d):
-            with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
                 result = mv.resolve_viewer_path()
                 assert result == fake_path
 
@@ -75,9 +82,9 @@ class TestOpenDiagram:
         import jcodemunch_mcp.tools.mermaid_viewer as mv
         import jcodemunch_mcp.config as config_module
         importlib.reload(mv)
-        fake_viewer = str(tmp_path / "mmd-viewer")
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
         with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
-            with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
                 with patch("subprocess.Popen") as mock_popen:
                     result = mv.open_diagram("graph TD; A-->B;", storage_path=tmp_path)
                     assert result["opened"] is True
@@ -85,14 +92,81 @@ class TestOpenDiagram:
                     assert "jcm-diagram-" in result["path"]
                     mock_popen.assert_called_once()
 
+    def test_mkdir_or_write_failure_is_non_fatal(self, tmp_path):
+        """F4: mkdir/write_text failures surface as write_failed, not exceptions."""
+        import importlib
+        import jcodemunch_mcp.tools.mermaid_viewer as mv
+        import jcodemunch_mcp.config as config_module
+        importlib.reload(mv)
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
+        with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
+                with patch.object(Path, "write_text", side_effect=OSError("disk full")):
+                    result = mv.open_diagram("graph TD; A-->B;", storage_path=tmp_path)
+                    assert result["opened"] is False
+                    assert "write_failed" in result["error"]
+
+    def test_prunes_stale_files(self, tmp_path):
+        """F3: open_diagram purges jcm- files older than _STALE_FILE_AGE_SEC."""
+        import importlib
+        import time as _time
+        import jcodemunch_mcp.tools.mermaid_viewer as mv
+        import jcodemunch_mcp.config as config_module
+        importlib.reload(mv)
+        d = tmp_path / "temp" / "mermaid"
+        d.mkdir(parents=True)
+        stale = d / "jcm-diagram-old.mmd"
+        stale.write_text("old")
+        old_ts = _time.time() - (mv._STALE_FILE_AGE_SEC + 60)
+        os.utime(stale, (old_ts, old_ts))
+        fresh = d / "jcm-diagram-fresh.mmd"
+        fresh.write_text("fresh")
+        foreign = d / "other.txt"
+        foreign.write_text("leave alone")
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
+        with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
+                with patch("subprocess.Popen"):
+                    mv.open_diagram("graph TD;", storage_path=tmp_path)
+        assert not stale.exists(), "stale jcm- file should be purged"
+        assert fresh.exists(), "fresh jcm- file should survive"
+        assert foreign.exists(), "non-jcm file must never be touched"
+
+    def test_rejects_non_executable_on_posix(self, tmp_path):
+        """F5: configured path that isn't executable returns None on POSIX."""
+        if os.name == "nt":
+            pytest.skip("POSIX-only check")
+        import importlib
+        import jcodemunch_mcp.tools.mermaid_viewer as mv
+        import jcodemunch_mcp.config as config_module
+        importlib.reload(mv)
+        non_exec = tmp_path / "not-executable"
+        non_exec.write_text("not a binary")
+        os.chmod(non_exec, 0o644)
+        with patch.object(config_module, "get", side_effect=lambda k, d=None: str(non_exec) if k == "mermaid_viewer_path" else d):
+            assert mv.resolve_viewer_path() is None
+
+    def test_rejects_wrong_suffix_on_windows(self, tmp_path):
+        """F5: configured path without exec suffix returns None on Windows."""
+        if os.name != "nt":
+            pytest.skip("Windows-only check")
+        import importlib
+        import jcodemunch_mcp.tools.mermaid_viewer as mv
+        import jcodemunch_mcp.config as config_module
+        importlib.reload(mv)
+        bogus = tmp_path / "viewer.txt"
+        bogus.write_text("not a binary")
+        with patch.object(config_module, "get", side_effect=lambda k, d=None: str(bogus) if k == "mermaid_viewer_path" else d):
+            assert mv.resolve_viewer_path() is None
+
     def test_spawn_failure_is_non_fatal(self, tmp_path):
         import importlib
         import jcodemunch_mcp.tools.mermaid_viewer as mv
         import jcodemunch_mcp.config as config_module
         importlib.reload(mv)
-        fake_viewer = str(tmp_path / "mmd-viewer")
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
         with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
-            with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
                 with patch("subprocess.Popen", side_effect=OSError("exec failed")):
                     result = mv.open_diagram("graph TD; A-->B;", storage_path=tmp_path)
                     assert result["opened"] is False
@@ -104,9 +178,9 @@ class TestOpenDiagram:
         import jcodemunch_mcp.tools.mermaid_viewer as mv
         import jcodemunch_mcp.config as config_module
         importlib.reload(mv)
-        fake_viewer = str(tmp_path / "mmd-viewer")
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
         with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
-            with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
                 with patch("subprocess.Popen"):
                     assert mv._viewer_used is False
                     mv.open_diagram("graph TD; A-->B;", storage_path=tmp_path)
@@ -127,9 +201,9 @@ class TestWasViewerUsed:
         import jcodemunch_mcp.tools.mermaid_viewer as mv
         import jcodemunch_mcp.config as config_module
         importlib.reload(mv)
-        fake_viewer = str(tmp_path / "mmd-viewer")
+        fake_viewer = str(tmp_path / "mmd-viewer.exe")
         with patch.object(config_module, "get", side_effect=lambda k, d=None: fake_viewer if k == "mermaid_viewer_path" else d):
-            with patch.object(Path, "exists", return_value=True):
+            with patch.object(Path, "exists", return_value=True), _viewer_exec_patches():
                 with patch("subprocess.Popen"):
                     mv.open_diagram("graph TD; A-->B;", storage_path=tmp_path)
                     assert mv.was_viewer_used() is True

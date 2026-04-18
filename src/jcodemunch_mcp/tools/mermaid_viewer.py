@@ -27,17 +27,54 @@ _viewer_used = False
 # Filename prefix — makes cleanup selective and safe.
 _FILE_PREFIX = "jcm-"
 
+# Stale-file age threshold for per-call purge (seconds).
+_STALE_FILE_AGE_SEC = 3600
+
+
+def _prune_stale_files(d: Path) -> None:
+    """Best-effort removal of jcm- temp files older than _STALE_FILE_AGE_SEC."""
+    cutoff = time.time() - _STALE_FILE_AGE_SEC
+    try:
+        entries = list(d.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if not (entry.is_file() and entry.name.startswith(_FILE_PREFIX)):
+            continue
+        try:
+            if entry.stat().st_mtime < cutoff:
+                entry.unlink()
+        except OSError:
+            logger.debug("Failed to prune stale mermaid temp file %s", entry, exc_info=True)
+
 
 def _temp_dir(storage_path: Path | None = None) -> Path:
     base = Path(storage_path) if storage_path else config_module._global_storage_path()
     return base / "temp" / "mermaid"
 
 
+_WINDOWS_EXEC_SUFFIXES = {".exe", ".cmd", ".bat", ".com"}
+
+
+def _looks_executable(path: Path) -> bool:
+    """Platform-appropriate executability check.
+
+    The existence probe uses `Path.exists()` so existing tests that mock it
+    continue to work. On Windows, require a known exec suffix; on POSIX,
+    require the execute bit.
+    """
+    if not path.exists():
+        return False
+    if os.name == "nt":
+        return path.suffix.lower() in _WINDOWS_EXEC_SUFFIXES
+    return os.access(str(path), os.X_OK)
+
+
 def resolve_viewer_path() -> str | None:
     """Return the mmd-viewer executable path, or None if not found."""
     configured = config_module.get("mermaid_viewer_path", "")
     if configured:
-        return configured if Path(configured).exists() else None
+        return configured if _looks_executable(Path(configured)) else None
     return shutil.which("mmd-viewer")
 
 
@@ -52,10 +89,15 @@ def open_diagram(mermaid: str, storage_path: Path | None = None) -> dict:
     if not viewer:
         return {"opened": False, "error": "viewer_not_found"}
     d = _temp_dir(storage_path)
-    d.mkdir(parents=True, exist_ok=True)
-    fname = f"{_FILE_PREFIX}diagram-{os.getpid()}-{time.time_ns()}.mmd"
-    p = d / fname
-    p.write_text(mermaid, encoding="utf-8")
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        _prune_stale_files(d)
+        fname = f"{_FILE_PREFIX}diagram-{os.getpid()}-{time.time_ns()}.mmd"
+        p = d / fname
+        p.write_text(mermaid, encoding="utf-8")
+    except OSError as e:
+        logger.warning("Failed to write mermaid temp file: %s", e, exc_info=True)
+        return {"opened": False, "error": f"write_failed: {e}"}
     _viewer_used = True
     try:
         with open(p, "rb") as f:
