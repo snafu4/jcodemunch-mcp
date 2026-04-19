@@ -210,16 +210,27 @@ def _get_mcp_session(mcp_server: Server | None = None) -> Any | None:
     return getattr(request_context, "session", None)
 
 
+class HttpAdaptiveTieringError(SystemExit):
+    """Raised to abort startup when adaptive_tiering is combined with HTTP transport."""
+
+
 def _warn_if_http_adaptive_tiering(transport: str) -> None:
-    """Warn about multi-client risk when adaptive_tiering is used over HTTP."""
+    """Refuse to start when adaptive_tiering is combined with HTTP transport.
+
+    Tier state is process-global, so one client's plan_turn(model=...) flip
+    changes the tool surface visible to every other concurrent client on the
+    same server. That's a misconfiguration, not a heads-up condition — emit
+    an ERROR and abort rather than proceed silently.
+    """
     if not config_module.get("adaptive_tiering", False):
         return
-    logger.warning(
-        "adaptive_tiering is enabled with transport=%s. "
-        "Tier overrides are process-global and may leak across concurrent HTTP clients. "
-        "Use stdio for single-client sessions or disable adaptive_tiering for HTTP.",
-        transport,
+    message = (
+        f"adaptive_tiering: true is incompatible with transport={transport}. "
+        "Tier overrides are process-global and would leak across concurrent HTTP "
+        "clients. Either run under stdio, or set adaptive_tiering: false in config.jsonc."
     )
+    logger.error(message)
+    raise HttpAdaptiveTieringError(f"refusing to start: {message}")
 
 
 def _log_startup_validation_warnings() -> None:

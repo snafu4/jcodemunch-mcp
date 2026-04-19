@@ -101,7 +101,7 @@ def test_startup_logs_bundle_disabled_overlap(caplog, monkeypatch):
     assert any("search_symbols" in m and "disabled_tools" in m for m in msgs)
 
 
-def test_warn_if_http_adaptive_tiering_logs_warning(caplog, monkeypatch):
+def test_warn_if_http_adaptive_tiering_refuses_to_start(caplog, monkeypatch):
     real_get = config_mod.get
 
     def _fake_get(key, *a, **kw):
@@ -110,10 +110,24 @@ def test_warn_if_http_adaptive_tiering_logs_warning(caplog, monkeypatch):
         return real_get(key, *a, **kw)
 
     monkeypatch.setattr(config_mod, "get", _fake_get)
-    caplog.set_level("WARNING")
-    server_mod._warn_if_http_adaptive_tiering("sse")
+    caplog.set_level("ERROR")
+    with pytest.raises(server_mod.HttpAdaptiveTieringError):
+        server_mod._warn_if_http_adaptive_tiering("sse")
     msgs = [r.message for r in caplog.records]
     assert any("adaptive_tiering" in m and "transport=sse" in m for m in msgs)
+
+
+def test_warn_if_http_adaptive_tiering_noop_when_disabled(monkeypatch):
+    real_get = config_mod.get
+
+    def _fake_get(key, *a, **kw):
+        if key == "adaptive_tiering":
+            return False
+        return real_get(key, *a, **kw)
+
+    monkeypatch.setattr(config_mod, "get", _fake_get)
+    server_mod._warn_if_http_adaptive_tiering("sse")
+    server_mod._warn_if_http_adaptive_tiering("streamable-http")
 
 
 # --------------------------------------------------------------------------- #
