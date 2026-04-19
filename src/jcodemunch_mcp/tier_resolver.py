@@ -73,8 +73,14 @@ def resolve_model_to_tier(
         if fnmatch.fnmatchcase(norm, key.lower()):
             return (tier, f"glob:{key}")
 
-    # 3. Substring — longest key wins so a specific entry beats a broader one
-    substring_hits = [(key, tier) for key, tier in literal_keys if key.lower() in norm]
+    # 3. Substring — longest key wins so a specific entry beats a broader one.
+    # Normalize each key before comparing so provider-prefixed entries like
+    # "anthropic/claude-haiku" still match the normalized incoming id.
+    substring_hits = [
+        (key, tier)
+        for key, tier in literal_keys
+        if (nk := normalize_model_id(key)) and nk in norm
+    ]
     if substring_hits:
         key, tier = max(substring_hits, key=lambda kt: len(kt[0]))
         return (tier, f"substring:{key}")

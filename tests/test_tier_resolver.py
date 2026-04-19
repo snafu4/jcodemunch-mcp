@@ -124,6 +124,23 @@ class TestResolveModelToTier:
         assert tier == "standard"
         assert reason == "substring:claude"
 
+    def test_substring_matches_provider_prefixed_key(self):
+        # Provider-prefixed keys normalize to the same form as the incoming id,
+        # so substring must compare normalized-against-normalized (not raw key
+        # against normalized target) — see audit finding F4 / issue #249.
+        mp = {"anthropic/claude-haiku": "core"}
+        tier, reason = resolve_model_to_tier("claude-haiku-4-5", mp)
+        assert tier == "core"
+        assert reason.startswith("substring:")
+
+    def test_substring_longest_match_wins_with_prefixed_keys(self):
+        mp = {
+            "anthropic/claude": "standard",
+            "openrouter/anthropic/claude-haiku": "core",
+        }
+        tier, reason = resolve_model_to_tier("claude-haiku-4-5", mp)
+        assert tier == "core"
+
 
 class TestValidateBundleDisabledOverlap:
     def test_no_overlap_returns_empty(self):
