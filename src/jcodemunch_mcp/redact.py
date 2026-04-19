@@ -61,10 +61,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
         r"(?P<secret>eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,})"
     )),
     # Bearer tokens in Authorization-header form.
-    # Anchored to structural context (HTTP-style header or capital `Bearer `)
-    # to avoid matching identifiers like `refresh_token some_var_name`.
+    # Require the `Authorization` header prefix — matching a bare `Bearer`
+    # produced false positives on prose/docstrings containing the word
+    # (audit finding F9).
     ("bearer_token", re.compile(
-        r"(?:(?i:authorization)\s*[:=]\s*)?Bearer\s+(?P<secret>[A-Za-z0-9_\-\.]{20,})"
+        r"(?i:authorization)\s*[:=]\s*Bearer\s+(?P<secret>[A-Za-z0-9_\-\.]{20,})"
     )),
     # GitHub personal access tokens (ghp_, gho_, ghu_, ghs_, ghr_)
     ("github_token", re.compile(
@@ -161,10 +162,10 @@ def redact_dict(data: Any, _depth: int = 0) -> tuple[Any, int]:
     """
     if _depth > 20:
         # Don't return raw data past the cap — that would leak secrets we were
-        # asked to scrub. Collapse strings and containers to a sentinel.
-        if isinstance(data, str) and len(data) >= 16:
-            return "[REDACTED:depth_exceeded]", 1
-        if isinstance(data, (dict, list)):
+        # asked to scrub. Collapse every scalar/container to a sentinel; the
+        # prior 16-char length gate let short high-signal prefixes (e.g. an
+        # AWS access-key prefix) slip through (audit finding F10).
+        if isinstance(data, (str, dict, list)):
             return "[REDACTED:depth_exceeded]", 1
         return data, 0
 

@@ -29,11 +29,25 @@ class TestBearerTokenPattern:
         assert count >= 1
         assert "[REDACTED:" in out
 
-    def test_capital_bearer_standalone_redacted(self):
-        line = "Bearer abcdefghijklmnopqrstuvwxyz12345"
+    def test_bare_bearer_in_prose_preserved(self):
+        # Bare `Bearer <token>` outside an Authorization header is too noisy —
+        # docstrings referencing the word Bearer produced false positives
+        # (audit finding F9). We now require the `Authorization` anchor.
+        line = "Send a Bearer abcdefghij1234567890 request to the endpoint."
         out, count = _redact_string(line)
-        assert count >= 1
-        assert "[REDACTED:bearer_token]" in out
+        assert count == 0
+        assert out == line
+
+    def test_authorization_bearer_case_insensitive(self):
+        # Anchor is case-insensitive; common header casings all redact.
+        for header in (
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz12345",
+            "authorization=Bearer abcdefghijklmnopqrstuvwxyz12345",
+            "AUTHORIZATION : Bearer abcdefghijklmnopqrstuvwxyz12345",
+        ):
+            out, count = _redact_string(header)
+            assert count >= 1, header
+            assert "[REDACTED:bearer_token]" in out
 
 
 class TestGenericApiKeyEntropy:
@@ -82,6 +96,19 @@ class TestDepthCap:
         # never survives end-to-end.
         flat = repr(out)
         assert secret not in flat
+
+    def test_past_depth_cap_collapses_short_strings_too(self):
+        # Prior cap logic returned short (<16-char) strings unchanged past
+        # depth 20 — a 15-char AWS access-key prefix could slip through
+        # (audit finding F10). Any string at the cap must now become a
+        # sentinel.
+        short_prefix = "AKIAIOSFODNN7"  # 13 chars, still a recognizable leak
+        leaf = {"x": short_prefix}
+        nested = leaf
+        for _ in range(25):
+            nested = {"n": nested}
+        out, _ = redact_dict(nested)
+        assert short_prefix not in repr(out)
 
 
 # ── F6: _meta string fields get scanned ────────────────────────────────────
