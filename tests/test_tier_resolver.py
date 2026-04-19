@@ -106,6 +106,24 @@ class TestResolveModelToTier:
         assert tier == "standard"
         assert reason == "substring:gpt-4o"
 
+    def test_substring_longest_match_wins_broad_first(self):
+        mp = {"claude": "standard", "claude-haiku": "core"}
+        tier, reason = resolve_model_to_tier("claude-haiku-4-5", mp)
+        assert tier == "core"
+        assert reason == "substring:claude-haiku"
+
+    def test_substring_longest_match_wins_specific_first(self):
+        mp = {"claude-haiku": "core", "claude": "standard"}
+        tier, reason = resolve_model_to_tier("claude-haiku-4-5", mp)
+        assert tier == "core"
+        assert reason == "substring:claude-haiku"
+
+    def test_substring_broader_key_still_matches_non_haiku(self):
+        mp = {"claude": "standard", "claude-haiku": "core"}
+        tier, reason = resolve_model_to_tier("claude-opus-4-7", mp)
+        assert tier == "standard"
+        assert reason == "substring:claude"
+
 
 class TestValidateBundleDisabledOverlap:
     def test_no_overlap_returns_empty(self):

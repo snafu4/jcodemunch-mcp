@@ -39,7 +39,9 @@ def resolve_model_to_tier(
     Layer order, first match wins:
       1. exact match on normalized config keys
       2. glob match (only keys containing '*' / '?' / '[')
-      3. substring match (key appears inside normalized id)
+      3. substring match — longest-matching key wins so that a more
+         specific entry like 'claude-haiku' beats a broader 'claude'
+         regardless of dict insertion order
       4. '*' wildcard entry in the map
       5. hardcoded 'full' fallback
 
@@ -71,10 +73,11 @@ def resolve_model_to_tier(
         if fnmatch.fnmatchcase(norm, key.lower()):
             return (tier, f"glob:{key}")
 
-    # 3. Substring
-    for key, tier in literal_keys:
-        if key.lower() in norm:
-            return (tier, f"substring:{key}")
+    # 3. Substring — longest key wins so a specific entry beats a broader one
+    substring_hits = [(key, tier) for key, tier in literal_keys if key.lower() in norm]
+    if substring_hits:
+        key, tier = max(substring_hits, key=lambda kt: len(kt[0]))
+        return (tier, f"substring:{key}")
 
     # 4. Wildcard
     if "*" in model_tier_map:
