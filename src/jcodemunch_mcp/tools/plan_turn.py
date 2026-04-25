@@ -287,5 +287,17 @@ def plan_turn(
     if confidence in ("low", "none"):
         result["action"] = "STOP_AND_REPORT_GAP"
     from ..retrieval.confidence import attach_confidence as _attach_confidence
+    from ..retrieval.confidence import extract_ledger_features as _ledger_feats
+    from ..storage.token_tracker import record_ranking_event as _record_ranking_event
     _attach_confidence(result, recommended_symbols)
+    _feat = _ledger_feats(recommended_symbols)
+    _record_ranking_event(
+        tool="plan_turn",
+        repo=f"{owner}/{name}",
+        query=query,
+        returned_ids=[r.get("id", r.get("symbol_id", "")) for r in recommended_symbols],
+        confidence=result["_meta"].get("confidence"),
+        semantic_used=False,
+        **_feat,
+    )
     return result

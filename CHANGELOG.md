@@ -2,6 +2,39 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.78.0] — 2026-04-25
+
+### Added — Ranking ledger (data-collection only; no behavior change)
+- **`ranking_events` table in `~/.code-index/telemetry.db`.** Schema:
+  `(ts, repo, tool, query_hash, query, returned_ids[json], top1_score,
+  top2_score, confidence, semantic_used, identity_hit, repo_is_stale)`.
+  Indexed on `repo`, `ts`, `query_hash` for fast aggregation.
+- **`record_ranking_event(...)` in `storage/token_tracker.py`.** Append
+  helper that no-ops when `perf_telemetry_enabled` is false. Wired into
+  every retrieval path: `search_symbols` (BM25, semantic/hybrid, fusion),
+  `plan_turn`, both `get_ranked_context` paths. Each call logs the
+  query, the top returned IDs (cap 50), the score gap, the confidence
+  value, and signals for whether semantic and identity-match channels
+  fired.
+- **`extract_ledger_features(scored_results)` helper** in
+  `retrieval/confidence.py` — uniform `(top1_score, top2_score,
+  identity_hit)` extraction so each retrieval tool feeds the ledger
+  with the same feature shape.
+- **`analyze_perf(ledger=True)` view.** New optional flag pulls
+  `ranking_events` and returns `ranking_ledger` summary with
+  per-repo (events, avg_confidence, identity_hits, semantic_used,
+  stale_events) and per-tool (events) aggregates. Window filter
+  (1h/24h/7d/all/session) applies to the ledger query.
+- **`ranking_db_query(...)` reader** mirrors `perf_db_query` for the
+  ledger table.
+- 12 tests in `tests/test_ranking_ledger.py` covering feature
+  extraction, persistence on/off, query-hash stability, repo/tool
+  filters, ledger summary aggregation, and search_symbols invocation
+  capture.
+
+This release stores data; v1.79.0 will train per-repo ranking weights
+from it.
+
 ## [1.77.0] — 2026-04-25
 
 ### Added — Per-symbol freshness markers

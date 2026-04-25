@@ -1262,6 +1262,11 @@ def _build_tools_list() -> list[Tool]:
                         "type": "string",
                         "description": "Compare current session against a saved baseline at benchmarks/token_baselines/v{version}.json (e.g. \"1.74.0\"). Adds baseline_diff to the response with per-tool deltas in tokens_saved and latency.",
                     },
+                    "ledger": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Include ranking_ledger summary (per-repo and per-tool event counts, average confidence, identity hits, semantic usage). Reads telemetry.db ranking_events table populated since v1.78.0; requires perf_telemetry_enabled.",
+                    },
                 },
             }
         ),
@@ -3222,6 +3227,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     tool=arguments.get("tool"),
                     storage_path=storage_path,
                     compare_release=arguments.get("compare_release"),
+                    ledger=arguments.get("ledger", False),
                 )
             )
         elif name == "get_session_context":

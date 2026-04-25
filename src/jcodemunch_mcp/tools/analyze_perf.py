@@ -65,12 +65,52 @@ def _percentile(sorted_vals: list[float], pct: float) -> float:
     return sorted_vals[idx]
 
 
+def _ledger_summary(rows: list[tuple], top: int) -> dict:
+    """Aggregate ranking_events rows by repo and by tool."""
+    by_repo: dict = {}
+    by_tool: dict = {}
+    for ts, repo, tool, qh, query, returned_ids, top1, top2, conf, sem, ident, stale in rows:
+        rb = by_repo.setdefault(repo or "<no-repo>", {
+            "events": 0,
+            "avg_confidence": 0.0,
+            "_conf_total": 0.0,
+            "_conf_count": 0,
+            "stale_events": 0,
+            "identity_hits": 0,
+            "semantic_used": 0,
+        })
+        rb["events"] += 1
+        if conf is not None:
+            rb["_conf_total"] += float(conf)
+            rb["_conf_count"] += 1
+        if stale:
+            rb["stale_events"] += 1
+        if ident:
+            rb["identity_hits"] += 1
+        if sem:
+            rb["semantic_used"] += 1
+        tb = by_tool.setdefault(tool, {"events": 0})
+        tb["events"] += 1
+    for repo_name, rb in by_repo.items():
+        ct = rb.pop("_conf_count", 0)
+        total = rb.pop("_conf_total", 0.0)
+        rb["avg_confidence"] = round(total / ct, 3) if ct else 0.0
+    repo_ranked = sorted(by_repo.items(), key=lambda kv: kv[1]["events"], reverse=True)[:top]
+    tool_ranked = sorted(by_tool.items(), key=lambda kv: kv[1]["events"], reverse=True)
+    return {
+        "total_events": len(rows),
+        "by_repo": [{"repo": r, **stats} for r, stats in repo_ranked],
+        "by_tool": [{"tool": t, **stats} for t, stats in tool_ranked],
+    }
+
+
 def analyze_perf(
     window: str = "session",
     top: int = _DEFAULT_TOP,
     tool: Optional[str] = None,
     storage_path: Optional[str] = None,
     compare_release: Optional[str] = None,
+    ledger: bool = False,
 ) -> dict:
     """Return per-tool latency + cache-hit telemetry for the current session
     (and the persisted perf db if perf_telemetry_enabled is set).
@@ -206,4 +246,16 @@ def analyze_perf(
         out["baseline_meta"] = baseline_meta
     if baseline_diff is not None:
         out["baseline_diff"] = baseline_diff
+
+    if ledger:
+        seconds_map_l = {"1h": 3600.0, "24h": 86_400.0, "7d": 7 * 86_400.0}
+        window_seconds = seconds_map_l.get(window)  # None for session/all
+        rows = _tt.ranking_db_query(
+            base_path=storage_path,
+            window_seconds=window_seconds,
+            tool=tool,
+            limit=10_000,
+        )
+        out["ranking_ledger"] = _ledger_summary(rows, top=top)
+
     return out

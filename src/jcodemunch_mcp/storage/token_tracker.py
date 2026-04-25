@@ -308,11 +308,90 @@ class _State:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_tool ON tool_calls(tool)")
             conn.execute("CREATE INDEX IF NOT EXISTS ix_tool_calls_ts   ON tool_calls(ts)")
+            # v1.78.0 — ranking ledger (data-collection only; consumed by
+            # the online weight tuner in v1.79.0).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ranking_events (
+                    ts             REAL NOT NULL,
+                    repo           TEXT,
+                    tool           TEXT NOT NULL,
+                    query_hash     TEXT NOT NULL,
+                    query          TEXT NOT NULL,
+                    returned_ids   TEXT NOT NULL,    -- JSON-encoded list
+                    top1_score     REAL,
+                    top2_score     REAL,
+                    confidence     REAL,
+                    semantic_used  INTEGER NOT NULL,
+                    identity_hit   INTEGER NOT NULL,
+                    repo_is_stale  INTEGER NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_ranking_events_repo ON ranking_events(repo)")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_ranking_events_ts   ON ranking_events(ts)")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_ranking_events_qh   ON ranking_events(query_hash)")
             return conn
         except Exception:
             logger.debug("Failed to open perf db at %s", path, exc_info=True)
             self._perf_db_failed = True
             return None
+
+    def record_ranking_event(
+        self,
+        *,
+        tool: str,
+        repo: Optional[str],
+        query: str,
+        returned_ids: list[str],
+        top1_score: Optional[float] = None,
+        top2_score: Optional[float] = None,
+        confidence: Optional[float] = None,
+        semantic_used: bool = False,
+        identity_hit: bool = False,
+        repo_is_stale: bool = False,
+    ) -> None:
+        """Append a ranking event to the perf db (no-op when disabled).
+
+        v1.79.0 will use these rows to tune per-repo BM25/semantic weights.
+        """
+        if not _config.get("perf_telemetry_enabled", False):
+            return
+        try:
+            with self._lock:
+                conn = self._ensure_perf_db_locked()
+                if conn is None:
+                    return
+                try:
+                    import hashlib
+                    import json as _json
+                    qh = hashlib.sha1(query.encode("utf-8")).hexdigest()[:16]
+                    conn.execute(
+                        "INSERT INTO ranking_events "
+                        "(ts, repo, tool, query_hash, query, returned_ids, "
+                        " top1_score, top2_score, confidence, semantic_used, "
+                        " identity_hit, repo_is_stale) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            time.time(),
+                            repo or None,
+                            tool,
+                            qh,
+                            query,
+                            _json.dumps(list(returned_ids)[:50]),
+                            float(top1_score) if top1_score is not None else None,
+                            float(top2_score) if top2_score is not None else None,
+                            float(confidence) if confidence is not None else None,
+                            1 if semantic_used else 0,
+                            1 if identity_hit else 0,
+                            1 if repo_is_stale else 0,
+                        ),
+                    )
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        except Exception:
+            logger.debug("record_ranking_event failed for %s", tool, exc_info=True)
 
     def _persist_perf_locked(
         self,
@@ -629,6 +708,66 @@ def perf_db_path(base_path: Optional[str] = None) -> Path:
     root = Path(base_path) if base_path else Path.home() / ".code-index"
     root.mkdir(parents=True, exist_ok=True)
     return root / _PERF_DB_FILE
+
+
+def record_ranking_event(**kwargs) -> None:
+    """Append a ranking event to telemetry.db (no-op when telemetry disabled).
+
+    Keyword args: tool, repo, query, returned_ids, top1_score, top2_score,
+    confidence, semantic_used, identity_hit, repo_is_stale.
+    """
+    _state.record_ranking_event(**kwargs)
+
+
+def ranking_db_query(
+    base_path: Optional[str] = None,
+    window_seconds: Optional[float] = None,
+    repo: Optional[str] = None,
+    tool: Optional[str] = None,
+    limit: int = 1000,
+) -> list[tuple]:
+    """Read recent ranking events from telemetry.db.
+
+    Returns a list of tuples shaped exactly as the SELECT below — the
+    order matches the v1.78.0 ranking_events schema. Empty when the db
+    doesn't exist (telemetry disabled or never written).
+    """
+    path = perf_db_path(base_path)
+    if not path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(path), timeout=2.0)
+        try:
+            sql = (
+                "SELECT ts, repo, tool, query_hash, query, returned_ids, "
+                "top1_score, top2_score, confidence, semantic_used, "
+                "identity_hit, repo_is_stale FROM ranking_events"
+            )
+            args: list = []
+            clauses: list[str] = []
+            if window_seconds is not None:
+                clauses.append("ts >= ?")
+                args.append(time.time() - float(window_seconds))
+            if repo:
+                clauses.append("repo = ?")
+                args.append(repo)
+            if tool:
+                clauses.append("tool = ?")
+                args.append(tool)
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY ts DESC LIMIT ?"
+            args.append(int(limit))
+            return conn.execute(sql, args).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        # Schema not yet created (telemetry was never enabled in this
+        # storage dir, even though the file exists from another component).
+        return []
+    except Exception:
+        logger.debug("ranking_db_query failed at %s", path, exc_info=True)
+        return []
 
 
 def perf_db_query(
