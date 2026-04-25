@@ -1,9 +1,9 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.79.0 (published to PyPI)
+- **Version:** 1.80.0 (published to PyPI)
 - **INDEX_VERSION:** 9
-- **Tests:** 3674 passed, 7 skipped
+- **Tests:** 3691 passed, 7 skipped
 - **Python:** >=3.10
 
 ## Key Files
@@ -83,6 +83,7 @@ src/jcodemunch_mcp/
     confidence.py        # compute_confidence/attach_confidence: 0-1 retrieval confidence score (geometric mean of gap, strength, identity, freshness sub-signals); attached to _meta.confidence on search_symbols / plan_turn / get_ranked_context
     freshness.py         # FreshnessProbe: per-result _freshness classification (fresh / edited_uncommitted / stale_index); compares index SHA vs git HEAD + per-file mtime vs CodeIndex.file_mtimes; wired into search_symbols / get_symbol_source / get_context_bundle / get_ranked_context
     tuning.py            # WeightTuner + get_semantic_weight: learns per-repo ranking weights from v1.78.0 ranking_events ledger; ±0.05 step on semantic_weight (clamp 0.1-0.8) and identity_boost (clamp 0.5-2.0) when mean confidence between groups differs by ≥0.05; persists to ~/.code-index/tuning.jsonc; applied at query time when caller leaves semantic_weight at the default
+    embed_drift.py       # CANARY_STRINGS (16) + capture_canary/check_drift: pins canary embeddings to ~/.code-index/embed_canary.json, re-checks cosine drift via check_embedding_drift MCP tool; catches silent provider model changes (Gemini/OpenAI/bundled-ONNX); default threshold 0.05 cosine distance
 ```
 
 ## CLI Subcommands

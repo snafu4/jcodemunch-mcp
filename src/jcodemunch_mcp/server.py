@@ -73,7 +73,7 @@ _CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "get_symbol_diff", "embed_repo",
     # Utilities
     "get_session_stats", "get_session_context", "get_session_snapshot", "plan_turn", "register_edit", "invalidate_cache", "test_summarizer",
-    "audit_agent_config", "get_watch_status", "analyze_perf", "tune_weights",
+    "audit_agent_config", "get_watch_status", "analyze_perf", "tune_weights", "check_embedding_drift",
     # Runtime tier switching
     "set_tool_tier", "announce_model",
     # Composite retrieval
@@ -120,7 +120,7 @@ _TOOL_TIER_STANDARD: frozenset[str] = _TOOL_TIER_CORE | frozenset({
     "get_cross_repo_map", "get_tectonic_map", "get_signal_chains",
     "render_diagram", "get_project_intel",
     # Utilities
-    "invalidate_cache", "get_watch_status", "analyze_perf", "tune_weights",
+    "invalidate_cache", "get_watch_status", "analyze_perf", "tune_weights", "check_embedding_drift",
 })
 
 # full = everything (no filter applied)
@@ -398,6 +398,7 @@ _EXCLUDED_FROM_STRICT = frozenset({
     "invalidate_cache",
     "analyze_perf",
     "tune_weights",
+    "check_embedding_drift",
 })
 
 
@@ -1267,6 +1268,30 @@ def _build_tools_list() -> list[Tool]:
                         "type": "boolean",
                         "default": False,
                         "description": "Include ranking_ledger summary (per-repo and per-tool event counts, average confidence, identity hits, semantic usage). Reads telemetry.db ranking_events table populated since v1.78.0; requires perf_telemetry_enabled.",
+                    },
+                },
+            }
+        ),
+        Tool(
+            name="check_embedding_drift",
+            description="Pin (or re-check) a 16-string canary against the active embedding provider. On first run with capture=True (or force=True), embeds CANARY_STRINGS and persists the vectors to ~/.code-index/embed_canary.json. Subsequent calls re-embed those strings and report cosine drift; alarm fires when max drift exceeds threshold (default 0.05 = cos sim < 0.95). Use after upgrading providers, when retrieval quality drops unexpectedly, or as a periodic background check.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "capture": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Pin a fresh canary instead of running the drift check. No-ops when a canary already exists unless force=True.",
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Re-pin the canary before checking. Use after intentional provider/model upgrades.",
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "default": 0.05,
+                        "description": "Cosine-distance threshold above which the alarm fires (per-canary maximum, not mean).",
                     },
                 },
             }
@@ -2834,6 +2859,7 @@ _AUTO_WATCH_EXCLUDED = frozenset({
     "index_file",  # path arg is a file path, not a folder; requires repo already indexed
     "analyze_perf",
     "tune_weights",
+    "check_embedding_drift",
 })
 
 
@@ -3269,6 +3295,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     dry_run=arguments.get("dry_run", False),
                     min_events=arguments.get("min_events", 50),
                     explain=arguments.get("explain", False),
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "check_embedding_drift":
+            from .tools.check_embedding_drift import check_embedding_drift
+            result = await asyncio.to_thread(
+                functools.partial(
+                    check_embedding_drift,
+                    capture=arguments.get("capture", False),
+                    force=arguments.get("force", False),
+                    threshold=arguments.get("threshold", 0.05),
                     storage_path=storage_path,
                 )
             )
@@ -4431,7 +4468,8 @@ def _generate_claude_md_snippet(missing_only: bool = False) -> str:
                                 "winnow_symbols"]),
         ("Diffs & Embeddings", ["get_symbol_diff", "embed_repo"]),
         ("Session-Aware Routing", ["plan_turn", "get_session_context", "get_session_snapshot", "register_edit"]),
-        ("Utilities", ["get_session_stats", "analyze_perf", "tune_weights", "invalidate_cache", "test_summarizer",
+        ("Utilities", ["get_session_stats", "analyze_perf", "tune_weights", "check_embedding_drift",
+                        "invalidate_cache", "test_summarizer",
                         "audit_agent_config", "get_watch_status"]),
         ("Runtime Tier Switching", ["set_tool_tier", "announce_model"]),
         ("Self-Guide", ["jcodemunch_guide"]),

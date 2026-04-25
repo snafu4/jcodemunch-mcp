@@ -2,6 +2,45 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.80.0] — 2026-04-25 — closes the 7-release telemetry initiative
+
+### Added — Embedding drift detector
+- **`retrieval/embed_drift.py`.** Pins a 16-string deterministic canary
+  (`CANARY_STRINGS`, append-only) and embeds it with the active provider.
+  Snapshot persists to `~/.code-index/embed_canary.json` as
+  `{provider, model, dim, captured_at, strings, vectors}`.
+  `check_drift(threshold=0.05)` re-embeds the canaries and compares
+  cosine similarity to the snapshot; alarm fires when max cosine
+  distance exceeds the threshold.
+- **`check_embedding_drift` MCP tool.** First-time use with `capture=True`
+  pins the canary; subsequent calls run the drift check. `force=True`
+  re-pins (use after intentional provider/model upgrades). Catches
+  silent provider model changes (Gemini revs, OpenAI weight updates,
+  bundled-ONNX swaps) that quietly degrade hybrid retrieval.
+- Reuses `embed_repo._detect_provider` so the canary tracks the live
+  encoder (no duplicate provider detection).
+- Registered in canonical names, standard tier, default
+  `tool_tier_bundles`, init template, CLAUDE.md Utilities snippet,
+  EXCLUDED_FROM_STRICT, AUTO_WATCH_EXCLUDED.
+- 17 tests in `tests/test_embed_drift.py` covering canary contract
+  stability, capture idempotency, force re-pin, no-provider error
+  path, zero-drift / large-drift / minor-noise paths, the wrapping
+  tool's capture/check flow, cosine helper edge cases, and server
+  registration.
+
+### Verified
+- v1.75.0 replay benchmark gate passes 1.0/1.0/1.0 — no nDCG/MRR/Recall
+  regression.
+
+### Telemetry initiative complete (v1.74.0 → v1.80.0)
+1. v1.74.0 — telemetry foundation (per-tool latency + analyze_perf + opt-in SQLite sink)
+2. v1.75.0 — retrieval confidence + token-accounting baseline
+3. v1.76.0 — replayable benchmark + retrieval-quality harness
+4. v1.77.0 — per-symbol freshness markers
+5. v1.78.0 — ranking ledger
+6. v1.79.0 — online weight tuning
+7. v1.80.0 — embedding drift detector (this release)
+
 ## [1.79.0] — 2026-04-25
 
 ### Added — Online weight tuning (consumes the v1.78.0 ledger)
